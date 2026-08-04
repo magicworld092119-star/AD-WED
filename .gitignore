@@ -1,0 +1,78 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Data & Storage outputs
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/heatmaps/*
+!storage/heatmaps/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
+storage/history/*
+!storage/history/.gitkeep
+storage/logs/*
+!storage/logs/.gitkeep
+
+# Datasets
+ai/dataset/raw/*
+!ai/dataset/raw/.gitkeep
+ai/dataset/processed/*
+!ai/dataset/processed/.gitkeep
+ai/dataset/train/*
+!ai/dataset/train/.gitkeep
+ai/dataset/validation/*
+!ai/dataset/validation/.gitkeep
+ai/dataset/test/*
+!ai/dataset/test/.gitkeep
+
+# Model weights
+*.pth
+*.pt
+*.onnx
+*.safetensors
+ai/deep_learning/checkpoints/*
+!ai/deep_learning/checkpoints/.gitkeep
+ai/deep_learning/experiments/*
+!ai/deep_learning/experiments/.gitkeep
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment configs
+.env
+.env.local
+config/.env.local
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
