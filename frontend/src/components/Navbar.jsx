@@ -46,7 +46,7 @@ export default function Navbar() {
                 AD-WEB
               </span>
               <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950/80 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800">
-                XAI 3D sMRI
+                GRAD-CAM 3D sMRI
               </span>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Alzheimer's Explainable AI Platform</p>

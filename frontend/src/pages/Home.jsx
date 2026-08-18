@@ -11,6 +11,52 @@ import {
   ArrowRight,
   Lock
 } from 'lucide-react';
+const NeuronNetwork = () => (
+  <svg viewBox="0 0 500 700" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+    <g opacity="0.6">
+      <path d="M -50,150 C 80,100 150,250 250,300 C 350,350 400,450 480,400" stroke="#fed7aa" strokeWidth="0.8" strokeLinecap="round" />
+      <path d="M -50,550 C 100,600 180,450 250,400 C 320,350 400,250 470,200" stroke="#fed7aa" strokeWidth="0.8" strokeLinecap="round" />
+      <path d="M -50,350 C 80,380 150,350 200,330 C 280,300 350,280 430,310" stroke="#fed7aa" strokeWidth="0.8" strokeLinecap="round" />
+      
+      <path d="M 120,200 C 180,120 250,80 340,60" stroke="#fed7aa" strokeWidth="0.5" strokeLinecap="round" />
+      <path d="M 250,300 C 300,220 330,150 390,100" stroke="#fed7aa" strokeWidth="0.5" strokeLinecap="round" />
+      <path d="M 180,490 C 240,580 320,620 400,650" stroke="#fed7aa" strokeWidth="0.5" strokeLinecap="round" />
+      <path d="M 250,400 C 280,480 350,520 420,500" stroke="#fed7aa" strokeWidth="0.5" strokeLinecap="round" />
+      <path d="M 310,290 C 350,380 420,400 480,460" stroke="#fed7aa" strokeWidth="0.5" strokeLinecap="round" />
+
+      {/* Tiny connecting branches */}
+      <path d="M 180,140 C 220,100 280,120 340,90" stroke="#fed7aa" strokeWidth="0.3" strokeLinecap="round" />
+      <path d="M 300,390 C 340,430 380,380 410,420" stroke="#fed7aa" strokeWidth="0.3" strokeLinecap="round" />
+      <path d="M 220,540 C 250,500 290,560 340,540" stroke="#fed7aa" strokeWidth="0.3" strokeLinecap="round" />
+      <path d="M 350,220 C 380,180 410,250 450,230" stroke="#fed7aa" strokeWidth="0.3" strokeLinecap="round" />
+
+      {/* Synapse nodes */}
+      <circle cx="480" cy="400" r="2.5" fill="#fdba74" />
+      <circle cx="470" cy="200" r="2.5" fill="#fdba74" />
+      <circle cx="430" cy="310" r="2.5" fill="#fdba74" />
+      
+      <circle cx="340" cy="60" r="1.5" fill="#fdba74" />
+      <circle cx="390" cy="100" r="1.5" fill="#fdba74" />
+      <circle cx="400" cy="650" r="1.5" fill="#fdba74" />
+      <circle cx="420" cy="500" r="1.5" fill="#fdba74" />
+      <circle cx="480" cy="460" r="1.5" fill="#fdba74" />
+      
+      <circle cx="340" cy="90" r="1" fill="#fdba74" />
+      <circle cx="410" cy="420" r="1" fill="#fdba74" />
+      <circle cx="340" cy="540" r="1" fill="#fdba74" />
+      <circle cx="450" cy="230" r="1" fill="#fdba74" />
+    </g>
+    
+    {/* Animated Glow Paths */}
+    <path d="M -50,150 C 80,100 150,250 250,300 C 350,350 400,450 480,400" stroke="#f97316" strokeWidth="1.5" strokeLinecap="round" className="neuron-path-glow" style={{ filter: 'drop-shadow(0 0 6px rgba(249,115,22,0.8))' }} />
+    <path d="M -50,550 C 100,600 180,450 250,400 C 320,350 400,250 470,200" stroke="#fb923c" strokeWidth="1.2" strokeLinecap="round" className="neuron-path-glow-delayed" style={{ filter: 'drop-shadow(0 0 5px rgba(251,146,60,0.8))' }} />
+    <path d="M -50,350 C 80,380 150,350 200,330 C 280,300 350,280 430,310" stroke="#f97316" strokeWidth="1.2" strokeLinecap="round" className="neuron-path-glow" style={{ filter: 'drop-shadow(0 0 4px rgba(249,115,22,0.6))', animationDelay: '1s' }} />
+    
+    <path d="M 120,200 C 180,120 250,80 340,60" stroke="#f97316" strokeWidth="0.8" strokeLinecap="round" className="neuron-path-glow" style={{ filter: 'drop-shadow(0 0 3px rgba(249,115,22,0.6))', animationDelay: '3s' }} />
+    <path d="M 250,400 C 280,480 350,520 420,500" stroke="#fb923c" strokeWidth="0.8" strokeLinecap="round" className="neuron-path-glow-delayed" style={{ filter: 'drop-shadow(0 0 3px rgba(251,146,60,0.6))', animationDelay: '2s' }} />
+    <path d="M 250,300 C 300,220 330,150 390,100" stroke="#f97316" strokeWidth="0.8" strokeLinecap="round" className="neuron-path-glow" style={{ filter: 'drop-shadow(0 0 3px rgba(249,115,22,0.6))', animationDelay: '4s' }} />
+  </svg>
+);
 
 export default function Home() {
   const { isAuthenticated } = useAuth();
@@ -30,21 +76,34 @@ export default function Home() {
 
       {/* Hero Section */}
       <section className="text-center pt-8 space-y-6 max-w-4xl mx-auto relative">
-        <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-orange-100/80 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 text-xs font-bold shadow-sm">
-          <Sparkles className="w-4 h-4 text-orange-600 dark:text-orange-400" />
-          <span>{t('heroBadge')}</span>
+        
+        {/* Left Neuron Decoration */}
+        <div className="absolute left-[-250px] top-[-80px] w-[500px] h-[750px] opacity-70 pointer-events-none hidden xl:block z-0">
+          <NeuronNetwork />
         </div>
 
-        <h1 className="text-4xl sm:text-6xl font-black text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
-          {t('heroTitlePrefix')}{' '}
-          <span className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 bg-clip-text text-transparent">
-            {t('heroTitleHighlight')}
-          </span>
-        </h1>
+        {/* Right Neuron Decoration */}
+        <div className="absolute right-[-250px] top-[-80px] w-[500px] h-[750px] opacity-70 pointer-events-none hidden xl:block z-0" style={{ transform: 'scaleX(-1)' }}>
+          <NeuronNetwork />
+        </div>
 
-        <p className="text-slate-600 dark:text-slate-300 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed">
-          {t('heroSubtitle')}
-        </p>
+        <div className="relative z-10">
+          <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-orange-100/80 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 text-xs font-bold shadow-sm mb-6">
+            <Sparkles className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+            <span>{t('heroBadge')}</span>
+          </div>
+
+          <h1 className="text-4xl sm:text-6xl font-black text-slate-900 dark:text-slate-100 tracking-tight leading-tight mb-6">
+            {t('heroTitlePrefix')}{' '}
+            <span className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 bg-clip-text text-transparent">
+              {t('heroTitleHighlight')}
+            </span>
+          </h1>
+
+          <p className="text-slate-600 dark:text-slate-300 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed">
+            {t('heroSubtitle')}
+          </p>
+        </div>
 
         <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
           <button
@@ -130,7 +189,7 @@ export default function Home() {
 
           <div className="p-4 rounded-2xl bg-orange-50/50 dark:bg-slate-800/60 border border-orange-100 dark:border-slate-800 space-y-2">
             <span className="w-8 h-8 rounded-full bg-orange-500 text-white font-bold text-xs flex items-center justify-center mx-auto shadow-sm">4</span>
-            <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Grad-CAM XAI</p>
+            <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Grad-CAM</p>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">Heatmap & Clinical Report</p>
           </div>
         </div>

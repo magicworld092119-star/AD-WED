@@ -9,6 +9,24 @@
   }
 }
 
+@keyframes neuronFlow {
+  0% {
+    stroke-dashoffset: 2000;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
 
+.neuron-path-glow {
+  stroke-dasharray: 120 2500;
+  animation: neuronFlow 12s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(249, 115, 22, 0.8));
+}
 
-
+.neuron-path-glow-delayed {
+  stroke-dasharray: 100 2500;
+  animation: neuronFlow 15s linear infinite;
+  animation-delay: 3s;
+  filter: drop-shadow(0 0 6px rgba(249, 115, 22, 0.8));
+}

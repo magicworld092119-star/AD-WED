@@ -36,7 +36,7 @@ export const translations = {
     navRegister: "Register",
     navLogout: "Sign Out",
 
-    heroBadge: "Explainable AI (XAI) for Structural MRI (3D sMRI)",
+    heroBadge: "Explainable AI (GRAD-CAM) for Structural MRI (3D sMRI)",
     heroTitlePrefix: "Early Alzheimer's Detection via",
     heroTitleHighlight: "Deep Learning & Explainable AI",
     heroSubtitle: "AD-WEB integrates MONAI, PyTorch, and 3D Grad-CAM to deliver transparent, clinician-centric diagnostic insights for Alzheimer's stage classification.",
@@ -105,7 +105,7 @@ export const translations = {
     uploadStep5: "Executing 3D CNN Inference (CN / MCI / AD)",
     uploadStep6: "Generating Grad-CAM Class Activation Map",
 
-    dashTitle: "Alzheimer's Diagnostic & XAI Report",
+    dashTitle: "Alzheimer's Diagnostic & Grad-CAM Report",
     dashSubtitle: "AI-assisted stage prediction with 3D Grad-CAM class activation heatmaps and slice visualization.",
     dashStagePredicted: "Predicted Alzheimer's Stage",
     dashConfidenceScore: "Model Confidence Score",
