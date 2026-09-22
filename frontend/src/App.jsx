@@ -12,6 +12,8 @@ import UploadPage from './pages/UploadPage';
 import DashboardPage from './pages/DashboardPage';
 import HistoryPage from './pages/HistoryPage';
 import ProfilePage from './pages/ProfilePage';
+import AboutPage from './pages/AboutPage';
+import AgenticBackground from './components/AgenticBackground';
 
 function Footer() {
   const { t } = useLanguage();
@@ -35,49 +37,50 @@ export default function App() {
         <AuthProvider>
           <Router>
             <div className="min-h-screen flex flex-col justify-between bg-orange-50/30 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-orange-200 dark:selection:bg-orange-900 selection:text-orange-900 dark:selection:text-orange-100 relative transition-colors duration-200">
-              
+
               <div className="relative z-10 flex flex-col min-h-screen justify-between">
                 <Navbar />
 
-                <main className="flex-1 py-6">
+                <main className="flex-1 pt-24 sm:pt-28 pb-16">
                   <Routes>
                     {/* Public Routes */}
                     <Route path="/" element={<Home />} />
+                    <Route path="/about" element={<AboutPage />} />
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/register" element={<RegisterPage />} />
 
                     {/* Protected Routes */}
-                    <Route 
-                      path="/upload" 
+                    <Route
+                      path="/upload"
                       element={
                         <ProtectedRoute>
                           <UploadPage />
                         </ProtectedRoute>
-                      } 
+                      }
                     />
-                    <Route 
-                      path="/dashboard" 
+                    <Route
+                      path="/dashboard"
                       element={
                         <ProtectedRoute>
                           <DashboardPage />
                         </ProtectedRoute>
-                      } 
+                      }
                     />
-                    <Route 
-                      path="/history" 
+                    <Route
+                      path="/history"
                       element={
                         <ProtectedRoute>
                           <HistoryPage />
                         </ProtectedRoute>
-                      } 
+                      }
                     />
-                    <Route 
-                      path="/profile" 
+                    <Route
+                      path="/profile"
                       element={
                         <ProtectedRoute>
                           <ProfilePage />
                         </ProtectedRoute>
-                      } 
+                      }
                     />
 
                     {/* Fallback */}

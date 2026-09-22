@@ -132,15 +132,44 @@ class AppDatabase:
             self._save_json_users(users)
 
     # --- History Operations ---
-    async def get_history_records(self) -> list:
+    async def get_history_records(self, user_id: str | None = None, user_email: str | None = None) -> list:
+        email_clean = user_email.strip().lower() if user_email and user_email.strip() else None
+        uid_clean = user_id.strip() if user_id and user_id.strip() else None
+
+        # Disallow pseudo-null string values
+        if uid_clean in ("null", "undefined", "none", ""):
+            uid_clean = None
+        if email_clean in ("null", "undefined", "none", ""):
+            email_clean = None
+
+        # Enforce strict user isolation: if no valid user credentials provided, return empty list
+        if not uid_clean and not email_clean:
+            return []
+
         if self.mode == "mongodb":
-            cursor = self.db["history"].find().sort("scan_date", -1)
+            if uid_clean and email_clean:
+                query = {"$or": [{"user_id": uid_clean}, {"user_email": email_clean}]}
+            elif uid_clean:
+                query = {"user_id": uid_clean}
+            else:
+                query = {"user_email": email_clean}
+
+            cursor = self.db["history"].find(query).sort("scan_date", -1)
             records = await cursor.to_list(length=1000)
             for r in records:
                 r.pop("_id", None)
             return records
         else:
-            return self._load_json_history()
+            all_records = self._load_json_history()
+            filtered = []
+            for r in all_records:
+                r_uid = r.get("user_id")
+                r_email = r.get("user_email")
+                if email_clean and r_email and r_email.strip().lower() == email_clean:
+                    filtered.append(r)
+                elif uid_clean and r_uid and r_uid.strip() == uid_clean:
+                    filtered.append(r)
+            return filtered
 
     async def save_history_record(self, record: dict):
         if self.mode == "mongodb":

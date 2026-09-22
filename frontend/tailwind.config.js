@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
+
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,6 +9,13 @@ export default {
 
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["'Sora'", "'Inter'", 'sans-serif'],
+        heading: ["'Sora'", 'sans-serif'],
+        body: ["'Inter'", 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'monospace'],
+      },
+
       colors: {
         orange: {
           50: '#fff7ed',
@@ -21,6 +29,7 @@ export default {
           800: '#9a3412',
           900: '#7c2d12',
         },
+
         neuro: {
           light: '#fcfcfd',
           card: '#ffffff',
@@ -30,5 +39,6 @@ export default {
       }
     },
   },
+
   plugins: [],
 }

@@ -3,7 +3,8 @@ import datetime
 import nibabel as nib
 import numpy as np
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, status
 from backend.app.schemas.prediction_schema import PredictionResponse, StageProbability
 from backend.app.api.v1.history import save_history_record
 from config.settings import settings
@@ -15,7 +16,11 @@ async def predict_alzheimer_stage(
     file: UploadFile = File(...),
     patient_id: str = Form(""),
     patient_age: str = Form(""),
-    gender: str = Form("")
+    gender: str = Form(""),
+    user_id: Optional[str] = Form(None),
+    user_email: Optional[str] = Form(None),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_user_email: Optional[str] = Header(None, alias="X-User-Email")
 ):
     """
     Upload real 3D Brain MRI scan (.nii/.nii.gz) for preprocessing, stage prediction, and Grad-CAM generation.
@@ -90,10 +95,15 @@ async def predict_alzheimer_stage(
     p_age = patient_age.strip() if patient_age.strip() else "70"
     p_gender = gender.strip() if gender.strip() else "Unspecified"
     scan_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    current_uid = (user_id or x_user_id or "").strip() or None
+    current_email = (user_email or x_user_email or "").strip().lower() or None
 
     # Save to history records storage
     history_item = {
         "id": pred_id,
+        "user_id": current_uid,
+        "user_email": current_email,
         "patient_id": p_id,
         "patient_age": p_age,
         "gender": p_gender,

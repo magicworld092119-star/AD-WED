@@ -7,6 +7,28 @@ const API = axios.create({
   },
 });
 
+// Attach authenticated user information to all outgoing requests
+API.interceptors.request.use((config) => {
+  try {
+    const userStr = localStorage.getItem('ad_web_user');
+    if (userStr) {
+      const user = JSON.parse(userStr);
+      if (user.token) {
+        config.headers['Authorization'] = `Bearer ${user.token}`;
+      }
+      if (user.id) {
+        config.headers['X-User-Id'] = user.id;
+      }
+      if (user.email) {
+        config.headers['X-User-Email'] = user.email;
+      }
+    }
+  } catch (e) {
+    // Ignore JSON parse errors
+  }
+  return config;
+});
+
 export const authAPI = {
   login: async (email, password) => {
     const response = await API.post('/auth/login', { email, password });
@@ -25,12 +47,31 @@ export const authAPI = {
 };
 
 export const predictAPI = {
-  uploadAndPredict: async (file, patientId, patientAge, gender) => {
+  uploadAndPredict: async (file, patientId, patientAge, gender, userId = null, userEmail = null) => {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('patient_id', patientId);
-    formData.append('patient_age', patientAge);
-    formData.append('gender', gender);
+    formData.append('patient_id', patientId || '');
+    formData.append('patient_age', patientAge || '');
+    formData.append('gender', gender || '');
+
+    // Resolve user details if not explicitly passed
+    let uid = userId;
+    let email = userEmail;
+    if (!uid || !email) {
+      try {
+        const userStr = localStorage.getItem('ad_web_user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          uid = uid || user.id;
+          email = email || user.email;
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    if (uid) formData.append('user_id', uid);
+    if (email) formData.append('user_email', email);
 
     const response = await API.post('/predict', formData, {
       headers: {
@@ -42,8 +83,27 @@ export const predictAPI = {
 };
 
 export const historyAPI = {
-  getHistory: async () => {
-    const response = await API.get('/history');
+  getHistory: async (userId = null, userEmail = null) => {
+    let uid = userId;
+    let email = userEmail;
+    if (!uid && !email) {
+      try {
+        const userStr = localStorage.getItem('ad_web_user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          uid = user.id;
+          email = user.email;
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    const params = {};
+    if (uid) params.user_id = uid;
+    if (email) params.user_email = email;
+
+    const response = await API.get('/history', { params });
     return response.data;
   },
 };

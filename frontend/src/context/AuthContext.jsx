@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState } from 'react';
-import { authAPI } from '../services/apiService';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { authAPI, historyAPI } from '../services/apiService';
 
 const AuthContext = createContext(null);
 
@@ -9,9 +9,40 @@ export function AuthProvider({ children }) {
     return saved ? JSON.parse(saved) : null;
   });
 
+  const refreshUserScans = useCallback(async (customUser = null) => {
+    const activeUser = customUser || user;
+    if (!activeUser || (!activeUser.id && !activeUser.email)) return;
+    try {
+      const records = await historyAPI.getHistory(activeUser.id, activeUser.email);
+      const count = Array.isArray(records) ? records.length : 0;
+      setUser((prev) => {
+        if (!prev) return prev;
+        const updated = { ...prev, scansAnalyzed: count };
+        localStorage.setItem('ad_web_user', JSON.stringify(updated));
+        return updated;
+      });
+    } catch (err) {
+      // Ignore count fetch errors
+    }
+  }, [user?.id, user?.email]);
+
+  useEffect(() => {
+    if (user?.id || user?.email) {
+      refreshUserScans();
+    }
+  }, [user?.id, user?.email]);
+
   const login = async (email, password) => {
     try {
       const data = await authAPI.login(email, password);
+      let scanCount = 0;
+      try {
+        const historyRecords = await historyAPI.getHistory(data.id, data.email);
+        scanCount = Array.isArray(historyRecords) ? historyRecords.length : 0;
+      } catch (e) {
+        scanCount = 0;
+      }
+
       const userProfile = {
         id: data.id,
         email: data.email,
@@ -19,7 +50,7 @@ export function AuthProvider({ children }) {
         role: data.role,
         hospital: data.hospital_affiliation,
         token: data.token,
-        scansAnalyzed: 0,
+        scansAnalyzed: scanCount,
         avatar: "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=150&auto=format&fit=crop&q=80"
       };
       setUser(userProfile);
@@ -56,10 +87,13 @@ export function AuthProvider({ children }) {
   const logout = () => {
     setUser(null);
     localStorage.removeItem('ad_web_user');
+    try {
+      sessionStorage.removeItem('ad_active_scan');
+    } catch (e) {}
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, register, logout, refreshUserScans }}>
       {children}
     </AuthContext.Provider>
   );

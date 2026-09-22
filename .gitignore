@@ -37,6 +37,7 @@ storage/history/*
 !storage/history/.gitkeep
 storage/logs/*
 !storage/logs/.gitkeep
+storage/users.json
 
 # Datasets
 ai/dataset/raw/*

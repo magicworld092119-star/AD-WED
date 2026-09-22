@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { predictAPI } from '../services/apiService';
+import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { 
   Upload, 
@@ -14,6 +15,7 @@ import {
 
 export default function UploadPage() {
   const navigate = useNavigate();
+  const { user, refreshUserScans } = useAuth();
   const { t } = useLanguage();
   const [file, setFile] = useState(null);
   const [patientId, setPatientId] = useState('');
@@ -58,8 +60,20 @@ export default function UploadPage() {
     }, 700);
 
     try {
-      const response = await predictAPI.uploadAndPredict(file, patientId, patientAge, gender);
+      const response = await predictAPI.uploadAndPredict(
+        file, 
+        patientId, 
+        patientAge, 
+        gender, 
+        user?.id, 
+        user?.email
+      );
       clearInterval(stepInterval);
+      
+      // Refresh scan count for the user
+      if (refreshUserScans) {
+        refreshUserScans();
+      }
 
       setTimeout(() => {
         navigate('/dashboard', { 
@@ -68,10 +82,13 @@ export default function UploadPage() {
             patientId: patientId || response.prediction_id, 
             patientAge: patientAge || '70', 
             gender: gender || 'Female', 
-            filename: file.name 
+            filename: file.name,
+            userId: user?.id,
+            userEmail: user?.email
           } 
         });
       }, 500);
+
 
     } catch (error) {
       clearInterval(stepInterval);
@@ -82,7 +99,7 @@ export default function UploadPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 py-4 px-4">
+    <div className="max-w-7xl mx-auto space-y-6 pb-12 px-4">
       
       {/* Page Header */}
       <div className="text-center space-y-2">
