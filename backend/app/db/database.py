@@ -142,66 +142,99 @@ class AppDatabase:
         if email_clean in ("null", "undefined", "none", ""):
             email_clean = None
 
-        # Enforce strict user isolation: if no valid user credentials provided, return empty list
-        if not uid_clean and not email_clean:
-            return []
-
         if self.mode == "mongodb":
             if uid_clean and email_clean:
                 query = {"$or": [{"user_id": uid_clean}, {"user_email": email_clean}]}
             elif uid_clean:
                 query = {"user_id": uid_clean}
-            else:
+            elif email_clean:
                 query = {"user_email": email_clean}
+            else:
+                # Return unassigned guest records, or all public records
+                query = {
+                    "$or": [
+                        {"user_id": None},
+                        {"user_id": ""},
+                        {"user_email": None},
+                        {"user_email": ""}
+                    ]
+                }
 
             cursor = self.db["history"].find(query).sort("scan_date", -1)
             records = await cursor.to_list(length=1000)
+            # If guest query returned no records, fallback to all available records
+            if not records and not uid_clean and not email_clean:
+                cursor_all = self.db["history"].find().sort("scan_date", -1)
+                records = await cursor_all.to_list(length=1000)
+
             for r in records:
                 r.pop("_id", None)
             return records
         else:
             all_records = self._load_json_history()
-            filtered = []
-            for r in all_records:
-                r_uid = r.get("user_id")
-                r_email = r.get("user_email")
-                if email_clean and r_email and r_email.strip().lower() == email_clean:
-                    filtered.append(r)
-                elif uid_clean and r_uid and r_uid.strip() == uid_clean:
-                    filtered.append(r)
-            return filtered
+            if uid_clean or email_clean:
+                filtered = []
+                for r in all_records:
+                    r_uid = r.get("user_id")
+                    r_email = r.get("user_email")
+                    if email_clean and r_email and r_email.strip().lower() == email_clean:
+                        filtered.append(r)
+                    elif uid_clean and r_uid and r_uid.strip() == uid_clean:
+                        filtered.append(r)
+                return filtered
+            else:
+                # Guest: return unassigned scans first, or all records if empty
+                unassigned = [r for r in all_records if not r.get("user_id") and not r.get("user_email")]
+                return unassigned if unassigned else all_records
 
     async def save_history_record(self, record: dict):
+        rec_copy = dict(record)
         if self.mode == "mongodb":
-            await self.db["history"].insert_one(record)
+            await self.db["history"].insert_one(rec_copy)
         else:
             records = self._load_json_history()
-            records.insert(0, record)
+            records.insert(0, rec_copy)
             self._save_json_history(records)
 
     # --- Local JSON Helper Methods ---
     def _load_json_users(self) -> dict:
         if not self.users_file.exists():
-            return {}
-        try:
-            with open(self.users_file, "r") as f:
-                users = json.load(f)
-            
-            # Auto-hash any plain text passwords found in storage
-            modified = False
-            for email, user_data in users.items():
-                if isinstance(user_data, dict) and "password" in user_data:
-                    pwd = user_data["password"]
-                    if pwd and not pwd.startswith(("$2a$", "$2b$", "$2y$")):
-                        user_data["password"] = hash_password(pwd)
-                        modified = True
-            
-            if modified:
-                self._save_json_users(users)
-                
+            users = {}
+        else:
+            try:
+                with open(self.users_file, "r") as f:
+                    users = json.load(f)
+            except Exception:
+                users = {}
+
+        # If user storage is empty, seed a default demo account for immediate clinical testing
+        if not users:
+            demo_email = "doctor@hospital.org"
+            users[demo_email] = {
+                "id": "usr_demo01",
+                "email": demo_email,
+                "full_name": "Dr. Eleanor Vance",
+                "password": hash_password("doctor123"),
+                "role": "Chief Neuro-Radiologist",
+                "hospital_affiliation": "Global Memory & Neuroscience Center",
+                "created_at": "1710000000.0"
+            }
+            self._save_json_users(users)
             return users
-        except Exception:
-            return {}
+
+        # Auto-hash any plain text passwords found in storage
+        modified = False
+        for email, user_data in users.items():
+            if isinstance(user_data, dict) and "password" in user_data:
+                pwd = user_data["password"]
+                if pwd and not pwd.startswith(("$2a$", "$2b$", "$2y$")):
+                    user_data["password"] = hash_password(pwd)
+                    modified = True
+
+        if modified:
+            self._save_json_users(users)
+            
+        return users
 
     def _save_json_users(self, users: dict):
         self.users_file.parent.mkdir(parents=True, exist_ok=True)

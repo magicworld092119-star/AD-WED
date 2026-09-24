@@ -8,3 +8,4 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>,
 )
+//it render and passes control to app.jsx

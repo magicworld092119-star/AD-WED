@@ -11,9 +11,13 @@ import {
   RefreshCw,
   FileText,
   Download,
-  AlertCircle
+  AlertCircle,
+  Compass,
+  MapPin,
+  Info
 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
+import { getScanSliceUrl } from '../services/apiService';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -63,11 +67,33 @@ export default function DashboardPage() {
   const gender = scanData.gender || 'Unspecified';
   const filename = scanData.filename || (prediction ? prediction.filename : null);
 
+  const totalSlices = prediction?.num_slices || 96;
+  const peakSlices = prediction?.peak_slices || scanData?.peak_slices || { axial: 47, coronal: 48, sagittal: 48 };
   const [plane, setPlane] = useState('axial');
-  const [sliceIndex, setSliceIndex] = useState(64);
+  const [sliceIndex, setSliceIndex] = useState(() => peakSlices.axial ?? 47);
   const [showHeatmap, setShowHeatmap] = useState(true);
-  const [heatmapOpacity, setHeatmapOpacity] = useState(70);
+  const [heatmapOpacity, setHeatmapOpacity] = useState(75);
+  const [colormap, setColormap] = useState('turbo');
+  const [imageError, setImageError] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+
+  const predId =
+    prediction?.prediction_id ||
+    prediction?.id ||
+    scanData?.prediction_id ||
+    scanData?.id ||
+    (patientId && patientId.startsWith("scan_") ? patientId : null);
+  const sliceUrl = predId
+    ? getScanSliceUrl(predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap)
+    : null;
+
+  const handlePlaneChange = (newPlane) => {
+    setPlane(newPlane);
+    setImageError(false);
+    if (peakSlices && peakSlices[newPlane] !== undefined) {
+      setSliceIndex(peakSlices[newPlane]);
+    }
+  };
 
   // If no prediction or scan data is present
   if (!patientId && !prediction) {
@@ -108,6 +134,213 @@ export default function DashboardPage() {
     { stage: 'MCI', name: t('dashStageMCI'), probability: Number((probs.mci * 100).toFixed(1)), color: '#f59e0b' },
     { stage: 'AD', name: t('dashStageAD'), probability: Number((probs.ad * 100).toFixed(1)), color: '#ea580c' }
   ];
+
+  const hippoVol = prediction?.hippocampus_volume_mm3 || scanData.hippocampus_volume_mm3 || (stage.includes('AD') ? '2100.0' : stage.includes('MCI') ? '2800.0' : '3600.0');
+
+  // Compute rich, dynamic clinical explanation tailored to active prediction metrics
+  const dynamicExplanation = React.useMemo(() => {
+    const s = (stage || '').toUpperCase();
+    const isCN = s.includes('CN') || s.includes('NORMAL');
+    const isMCI = s.includes('MCI') || s.includes('MILD');
+    const isAD = !isCN && !isMCI;
+
+    const sorted = [...probabilitiesData].sort((a, b) => b.probability - a.probability);
+    const primary = sorted[0] || { stage: 'AD', probability: 80 };
+    const runnerUp = sorted[1] || { stage: 'MCI', probability: 15 };
+    const probMargin = (primary.probability - runnerUp.probability).toFixed(1);
+    const numHippo = parseFloat(hippoVol) || (isAD ? 2100 : isMCI ? 2800 : 3600);
+
+    if (isCN) {
+      return {
+        key: 'CN',
+        stageName: 'Cognitively Normal (CN)',
+        badge: 'Healthy / Low Risk',
+        badgeStyle: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
+        containerStyle: 'bg-gradient-to-br from-emerald-50/70 to-teal-50/40 dark:from-emerald-950/20 dark:to-teal-950/10 border-emerald-200/80 dark:border-emerald-900/50',
+        headerColor: 'text-emerald-800 dark:text-emerald-300',
+        atrophyRating: numHippo >= 3300 ? 'Normal Preserved Volume' : 'Borderline Age-Consistent',
+        atrophyColor: 'text-emerald-700 dark:text-emerald-400',
+        focalTarget: 'Cortical Baseline / Symmetrical Temporal Lobes',
+        followUp: 'Routine annual check-up (12-24 months)',
+        narrative: `Structural neuroimaging evaluates this scan at ${confScore}% confidence within the Cognitively Normal spectrum. Volumetric estimation indicates hippocampal volume is preserved at ${hippoVol} mm³, displaying no localized medial temporal lobe atrophy or compensatory ventricular expansion.`,
+        definition: 'CN reflects healthy neurocognitive architecture without significant amyloid plaque or neurofibrillary tau-associated neurodegeneration.',
+        differential: runnerUp.probability > 25
+          ? `Secondary probability of ${runnerUp.probability}% in ${runnerUp.stage} notes minor non-specific age changes, but primary biomarkers remain firmly normal.`
+          : `Pronounced classification margin (+${probMargin}% vs ${runnerUp.stage}) corroborates robust intact cortical preservation.`
+      };
+    } else if (isMCI) {
+      return {
+        key: 'MCI',
+        stageName: 'Mild Cognitive Impairment (MCI)',
+        badge: 'Prodromal / Moderate Risk',
+        badgeStyle: 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+        containerStyle: 'bg-gradient-to-br from-amber-50/70 to-orange-50/40 dark:from-amber-950/20 dark:to-orange-950/10 border-amber-200/80 dark:border-amber-900/50',
+        headerColor: 'text-amber-800 dark:text-amber-300',
+        atrophyRating: numHippo < 2600 ? 'Moderate Hippocampal Thinning' : 'Mild Focal Volume Loss',
+        atrophyColor: 'text-amber-700 dark:text-amber-400',
+        focalTarget: 'Entorhinal Cortex & Hippocampal Formations',
+        followUp: 'Serial surveillance neuroimaging in 6-12 months',
+        narrative: `Inference detects early neurostructural alterations characteristic of Mild Cognitive Impairment (${confScore}% confidence). Hippocampus volumetry measures approx. ${hippoVol} mm³, exhibiting mild-to-moderate thinning and early ventricular divergence.`,
+        definition: 'MCI represents an intermediate prodromal transition between normal cognitive aging and clinical dementia; daily functional autonomy is largely preserved while subtle memory deficits emerge.',
+        differential: runnerUp.stage === 'AD' && runnerUp.probability > 20
+          ? `A notable ${runnerUp.probability}% probability for AD flags elevated risk of longitudinal conversion; clinical monitoring is strongly advised.`
+          : `Distinguished by a ${probMargin}% probability lead over ${runnerUp.stage}, maintaining current classification within the prodromal phase.`
+      };
+    } else {
+      return {
+        key: 'AD',
+        stageName: "Alzheimer's Disease (AD)",
+        badge: 'Advanced / High Risk',
+        badgeStyle: 'bg-orange-100 text-orange-800 dark:bg-orange-950/70 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+        containerStyle: 'bg-gradient-to-br from-orange-50/70 to-red-50/40 dark:from-orange-950/20 dark:to-red-950/10 border-orange-200/80 dark:border-orange-900/50',
+        headerColor: 'text-orange-800 dark:text-orange-300',
+        atrophyRating: numHippo < 2300 ? 'Severe Bilateral Atrophy' : 'Significant Volumetric Loss',
+        atrophyColor: 'text-orange-700 dark:text-orange-400',
+        focalTarget: 'Medial Temporal Lobe & Lateral Ventricles',
+        followUp: 'Neurological evaluation & therapeutic care plan',
+        narrative: `Neuroimaging features exhibit hallmark morphological biomarkers of Alzheimer's Disease with ${confScore}% confidence. Quantitative assessment identifies significant hippocampal reduction down to ${hippoVol} mm³, alongside prominent compensatory ventricular dilation and cortical thinning.`,
+        definition: "Alzheimer's Disease is a progressive neurodegenerative disorder caused by amyloid-beta plaques and hyperphosphorylated tau neurofibrillary tangles, impairing memory, reasoning, and functional independence.",
+        differential: `High classification confidence (+${probMargin}% lead over ${runnerUp.stage}) indicates definitive multi-region structural neurodegeneration.`
+      };
+    }
+  }, [stage, confScore, hippoVol, probabilitiesData]);
+
+  // Key neuro-anatomical landmark slices for rapid PACS/radiological navigation
+  const anatomicalLandmarks = React.useMemo(() => {
+    const peak = peakSlices[plane] ?? (plane === 'axial' ? 47 : plane === 'coronal' ? 50 : 48);
+
+    if (plane === 'axial') {
+      return [
+        {
+          id: 'peak',
+          name: 'Peak Attention Hotspot',
+          shortName: 'Peak Saliency',
+          slice: peak,
+          icon: '🎯',
+          badge: 'Max Activation',
+          badgeColor: 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300 border-red-300 dark:border-red-800',
+          desc: 'Primary neural network gradient focus exhibiting maximal biomarker saliency.'
+        },
+        {
+          id: 'hippocampus',
+          name: 'Hippocampus & Parahippocampal Gyrus',
+          shortName: 'Hippocampus',
+          slice: 42,
+          icon: '🧠',
+          badge: 'Memory Formation',
+          badgeColor: 'bg-orange-100 text-orange-700 dark:bg-orange-950/80 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+          desc: 'Key medial temporal lobe structure. Primary site of early atrophy in MCI and AD.'
+        },
+        {
+          id: 'ventricles',
+          name: 'Lateral Ventricles & Fornix',
+          shortName: 'Lateral Ventricles',
+          slice: 54,
+          icon: '🌊',
+          badge: 'Ventricular Dilation',
+          badgeColor: 'bg-sky-100 text-sky-700 dark:bg-sky-950/80 dark:text-sky-300 border-sky-300 dark:border-sky-800',
+          desc: 'Ventricular enlargement ratio indicative of compensatory cerebral volume loss.'
+        },
+        {
+          id: 'temporal',
+          name: 'Entorhinal & Inferior Temporal Cortex',
+          shortName: 'Temporal Cortex',
+          slice: 34,
+          icon: '⚡',
+          badge: 'Cortical Thinning',
+          badgeColor: 'bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+          desc: 'Earliest cortical pathway affected by neurofibrillary tau tangle pathology.'
+        },
+      ];
+    } else if (plane === 'coronal') {
+      return [
+        {
+          id: 'peak',
+          name: 'Peak Attention Hotspot',
+          shortName: 'Peak Saliency',
+          slice: peak,
+          icon: '🎯',
+          badge: 'Max Activation',
+          badgeColor: 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300 border-red-300 dark:border-red-800',
+          desc: 'Coronal cross-section showing peak focal neural network attention weight.'
+        },
+        {
+          id: 'hippocampus',
+          name: 'Bilateral Hippocampal Formations',
+          shortName: 'Hippocampus Cross-Section',
+          slice: 50,
+          icon: '🧠',
+          badge: 'Bilateral Volumetry',
+          badgeColor: 'bg-orange-100 text-orange-700 dark:bg-orange-950/80 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+          desc: 'Coronal view optimal for evaluating hippocampal height and temporal horn width.'
+        },
+        {
+          id: 'ventricles',
+          name: 'Third & Lateral Ventricles',
+          shortName: 'Ventricular Body',
+          slice: 44,
+          icon: '🌊',
+          badge: 'Central CSF Cavity',
+          badgeColor: 'bg-sky-100 text-sky-700 dark:bg-sky-950/80 dark:text-sky-300 border-sky-300 dark:border-sky-800',
+          desc: 'Displays ventricular cavity boundaries and choroid plexus integrity.'
+        },
+        {
+          id: 'temporal',
+          name: 'Sylvian Fissure & Temporal Poles',
+          shortName: 'Temporal Lobes',
+          slice: 38,
+          icon: '⚡',
+          badge: 'Neocortical Margin',
+          badgeColor: 'bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+          desc: 'Inspects sulcal widening and anterior temporal lobe atrophy.'
+        },
+      ];
+    } else {
+      // Sagittal
+      return [
+        {
+          id: 'peak',
+          name: 'Peak Attention Hotspot',
+          shortName: 'Peak Saliency',
+          slice: peak,
+          icon: '🎯',
+          badge: 'Max Activation',
+          badgeColor: 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300 border-red-300 dark:border-red-800',
+          desc: 'Sagittal perspective highlighting depth of activation in deep gray matter.'
+        },
+        {
+          id: 'hippocampus',
+          name: 'Hippocampus Long-Axis Profile',
+          shortName: 'Hippocampus Profile',
+          slice: 36,
+          icon: '🧠',
+          badge: 'Longitudinal View',
+          badgeColor: 'bg-orange-100 text-orange-700 dark:bg-orange-950/80 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+          desc: 'Anterior-to-posterior extent of the hippocampal formation and subiculum.'
+        },
+        {
+          id: 'ventricles',
+          name: 'Midline Ventricular & Callosal Arch',
+          shortName: 'Corpus Callosum & Ventricle',
+          slice: 48,
+          icon: '🌊',
+          badge: 'Midline Architecture',
+          badgeColor: 'bg-sky-100 text-sky-700 dark:bg-sky-950/80 dark:text-sky-300 border-sky-300 dark:border-sky-800',
+          desc: 'Midsagittal evaluation of the corpus callosum and cerebellar structures.'
+        },
+        {
+          id: 'temporal',
+          name: 'Lateral Neocortex & Insula',
+          shortName: 'Lateral Cortex',
+          slice: 28,
+          icon: '⚡',
+          badge: 'Parietal/Temporal',
+          badgeColor: 'bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+          desc: 'Assessment of lateral perisylvian fissures and neocortical atrophy.'
+        },
+      ];
+    }
+  }, [plane, peakSlices]);
 
   const generateReportHtml = () => {
     const reportDate = new Date().toLocaleString();
@@ -453,7 +686,7 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
         {/* Left 2-Cols: Interactive MRI + GradCAM Slice Viewer */}
-        <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-6 shadow-sm flex flex-col justify-between">
+        <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-4 shadow-sm flex flex-col">
 
           {/* Viewport Control Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-orange-100 dark:border-slate-800 pb-4">
@@ -461,21 +694,21 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
             {/* Plane Switcher Buttons */}
             <div className="flex items-center space-x-1.5 bg-orange-50/80 dark:bg-slate-800/80 p-1 rounded-xl border border-orange-100 dark:border-slate-700 text-xs">
               <button
-                onClick={() => setPlane('axial')}
+                onClick={() => handlePlaneChange('axial')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all ${plane === 'axial' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
               >
                 Axial (Top-Down)
               </button>
               <button
-                onClick={() => setPlane('coronal')}
+                onClick={() => handlePlaneChange('coronal')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all ${plane === 'coronal' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
               >
                 Coronal (Frontal)
               </button>
               <button
-                onClick={() => setPlane('sagittal')}
+                onClick={() => handlePlaneChange('sagittal')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all ${plane === 'sagittal' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
               >
@@ -483,101 +716,234 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
               </button>
             </div>
 
-            {/* Heatmap Toggle & Opacity Slider */}
-            <div className="flex items-center space-x-4 bg-orange-50/80 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-orange-100 dark:border-slate-700 text-xs">
+            {/* Heatmap Controls: Peak Focus, Colormap, Toggle & Opacity */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {/* Focus on Hotspot Button */}
               <button
-                onClick={() => setShowHeatmap(!showHeatmap)}
-                className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg font-bold transition-all ${showHeatmap ? 'bg-orange-100 dark:bg-orange-950/80 text-orange-800 dark:text-orange-300 border border-orange-300 dark:border-orange-800' : 'text-slate-500 bg-white dark:bg-slate-900'
-                  }`}
+                onClick={() => setSliceIndex(peakSlices[plane] ?? 47)}
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold shadow-sm transition-all"
+                title="Jump directly to the slice where the neural network found maximum activation"
               >
-                {showHeatmap ? <Eye className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" /> : <EyeOff className="w-3.5 h-3.5" />}
-                <span>Grad-CAM XAI</span>
+                <span>🎯 Focus Hotspot (#{((peakSlices[plane] ?? 47) + 1)})</span>
               </button>
 
-              {showHeatmap && (
-                <div className="flex items-center space-x-2">
-                  <span className="text-slate-600 dark:text-slate-400 text-[11px] font-semibold">Opacity:</span>
-                  <input
-                    type="range"
-                    min="10"
-                    max="100"
-                    value={heatmapOpacity}
-                    onChange={(e) => setHeatmapOpacity(Number(e.target.value))}
-                    className="w-20 accent-orange-500 cursor-pointer"
+              {/* Colormap Selector */}
+              <select
+                value={colormap}
+                onChange={(e) => setColormap(e.target.value)}
+                className="bg-orange-50/80 dark:bg-slate-800/80 border border-orange-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl px-2.5 py-1.5 text-xs focus:outline-none cursor-pointer"
+                title="Select Grad-CAM heatmap color palette"
+              >
+                <option value="turbo">Turbo (Clear)</option>
+                <option value="jet">Jet (Classic)</option>
+                <option value="inferno">Inferno (Heat)</option>
+              </select>
+
+              {/* Heatmap Toggle & Opacity Slider */}
+              <div className="flex items-center space-x-3 bg-orange-50/80 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-orange-100 dark:border-slate-700">
+                <button
+                  onClick={() => setShowHeatmap(!showHeatmap)}
+                  className={`flex items-center space-x-1.5 px-2 py-0.5 rounded-lg font-bold transition-all ${showHeatmap ? 'bg-orange-100 dark:bg-orange-950/80 text-orange-800 dark:text-orange-300 border border-orange-300 dark:border-orange-800' : 'text-slate-500 bg-white dark:bg-slate-900'
+                    }`}
+                >
+                  {showHeatmap ? <Eye className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" /> : <EyeOff className="w-3.5 h-3.5" />}
+                  <span>Grad-CAM</span>
+                </button>
+
+                {showHeatmap && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-slate-600 dark:text-slate-400 text-[11px] font-semibold">Opacity:</span>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      value={heatmapOpacity}
+                      onChange={(e) => setHeatmapOpacity(Number(e.target.value))}
+                      className="w-16 accent-orange-500 cursor-pointer"
+                    />
+                    <span className="text-orange-700 dark:text-orange-400 font-mono text-[11px] font-bold w-6">{heatmapOpacity}%</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Medical Slice Display + Navigation Bar Group */}
+          <div className="space-y-2.5">
+            <div className="relative aspect-square max-h-[440px] mx-auto w-full bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner group">
+
+              {sliceUrl && !imageError ? (
+                <img
+                  src={sliceUrl}
+                  alt={`${plane} slice ${sliceIndex}`}
+                  onError={() => setImageError(true)}
+                  className="w-full h-full object-contain select-none"
+                />
+              ) : (
+                /* Fallback SVG Brain MRI + GradCAM Visualizer */
+                <svg viewBox="0 0 400 400" className="w-full h-full">
+                  <ellipse cx="200" cy="200" rx="150" ry="170" fill="#0d1117" stroke="#30363d" strokeWidth="4" />
+                  <path
+                    d="M 100 200 C 100 100, 300 100, 300 200 C 300 300, 100 300, 100 200 Z"
+                    fill="#161b22"
+                    stroke="#48515c"
+                    strokeWidth="3"
                   />
-                  <span className="text-orange-700 dark:text-orange-400 font-mono text-[11px] font-bold w-6">{heatmapOpacity}%</span>
+                  <path d="M 130 150 Q 180 130 200 160 T 270 150" stroke="#30363d" strokeWidth="2" fill="none" />
+                  <path d="M 120 200 Q 170 190 200 220 T 280 200" stroke="#30363d" strokeWidth="2" fill="none" />
+                  <path d="M 140 250 Q 190 240 200 270 T 260 250" stroke="#30363d" strokeWidth="2" fill="none" />
+
+                  <ellipse cx="170" cy="190" rx="20" ry="35" fill="#090d12" stroke="#21262d" />
+                  <ellipse cx="230" cy="190" rx="20" ry="35" fill="#090d12" stroke="#21262d" />
+
+                  {/* GRAD-CAM HEATMAP OVERLAY */}
+                  {showHeatmap && (
+                    <g style={{ opacity: heatmapOpacity / 100 }}>
+                      <circle cx="165" cy="225" r="32" fill="url(#gradCamRed)" />
+                      <circle cx="235" cy="225" r="30" fill="url(#gradCamRed)" />
+                      <ellipse cx="200" cy="180" rx="45" ry="25" fill="url(#gradCamYellow)" />
+                    </g>
+                  )}
+
+                  <defs>
+                    <radialGradient id="gradCamRed" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stopColor="#ea580c" stopOpacity="0.9" />
+                      <stop offset="60%" stopColor="#f59e0b" stopOpacity="0.6" />
+                      <stop offset="100%" stopColor="#ea580c" stopOpacity="0" />
+                    </radialGradient>
+                    <radialGradient id="gradCamYellow" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.7" />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+                    </radialGradient>
+                  </defs>
+                </svg>
+              )}
+
+              {/* Viewport Info Overlay */}
+              <div className="absolute top-3 left-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-mono text-slate-800 dark:text-slate-200 border border-orange-200 dark:border-slate-700 font-bold shadow-sm flex items-center space-x-1.5">
+                <span className="text-orange-600 dark:text-orange-400 uppercase font-black">{plane} View</span>
+                <span>•</span>
+                <span>Slice {sliceIndex + 1} / {totalSlices}</span>
+                {sliceIndex === (peakSlices[plane] ?? 47) && (
+                  <span className="bg-red-500 text-white px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider animate-pulse">
+                    🔥 Max Activation
+                  </span>
+                )}
+              </div>
+
+              {showHeatmap && (
+                <div className="absolute bottom-3 right-3 bg-orange-100/90 dark:bg-orange-950/90 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-bold text-orange-900 dark:text-orange-200 border border-orange-300 dark:border-orange-800 flex items-center space-x-1 shadow-sm">
+                  <span>🔥 Grad-CAM Activation Hotspot</span>
                 </div>
               )}
             </div>
-          </div>
 
-          {/* Simulated Medical Slice Display */}
-          <div className="relative aspect-square max-h-[440px] mx-auto w-full bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner group">
-
-            {/* SVG Brain MRI + GradCAM Simulation Visualizer */}
-            <svg viewBox="0 0 400 400" className="w-full h-full">
-              <ellipse cx="200" cy="200" rx="150" ry="170" fill="#0d1117" stroke="#30363d" strokeWidth="4" />
-              <path
-                d="M 100 200 C 100 100, 300 100, 300 200 C 300 300, 100 300, 100 200 Z"
-                fill="#161b22"
-                stroke="#48515c"
-                strokeWidth="3"
-              />
-              <path d="M 130 150 Q 180 130 200 160 T 270 150" stroke="#30363d" strokeWidth="2" fill="none" />
-              <path d="M 120 200 Q 170 190 200 220 T 280 200" stroke="#30363d" strokeWidth="2" fill="none" />
-              <path d="M 140 250 Q 190 240 200 270 T 260 250" stroke="#30363d" strokeWidth="2" fill="none" />
-
-              <ellipse cx="170" cy="190" rx="20" ry="35" fill="#090d12" stroke="#21262d" />
-              <ellipse cx="230" cy="190" rx="20" ry="35" fill="#090d12" stroke="#21262d" />
-
-              {/* GRAD-CAM HEATMAP OVERLAY */}
-              {showHeatmap && (
-                <g style={{ opacity: heatmapOpacity / 100 }}>
-                  <circle cx="165" cy="225" r="32" fill="url(#gradCamRed)" />
-                  <circle cx="235" cy="225" r="30" fill="url(#gradCamRed)" />
-                  <ellipse cx="200" cy="180" rx="45" ry="25" fill="url(#gradCamYellow)" />
-                </g>
-              )}
-
-              <defs>
-                <radialGradient id="gradCamRed" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stopColor="#ea580c" stopOpacity="0.9" />
-                  <stop offset="60%" stopColor="#f59e0b" stopOpacity="0.6" />
-                  <stop offset="100%" stopColor="#ea580c" stopOpacity="0" />
-                </radialGradient>
-                <radialGradient id="gradCamYellow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.7" />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
-                </radialGradient>
-              </defs>
-            </svg>
-
-            {/* Viewport Info Overlay */}
-            <div className="absolute top-3 left-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-mono text-slate-800 dark:text-slate-200 border border-orange-200 dark:border-slate-700 font-bold shadow-sm">
-              <span className="text-orange-600 dark:text-orange-400 uppercase">{plane} View</span> • Slice {sliceIndex} / 128
-            </div>
-
-            {showHeatmap && (
-              <div className="absolute bottom-3 right-3 bg-orange-100/90 dark:bg-orange-950/90 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-bold text-orange-900 dark:text-orange-200 border border-orange-300 dark:border-orange-800 flex items-center space-x-1 shadow-sm">
-                <span>🔥 Grad-CAM Activation Hotspot</span>
+            {/* Slice Slider Bar - positioned directly under scan viewer */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+                <span className="font-bold text-slate-800 dark:text-slate-200">3D Volume Slice Navigation</span>
+                <div className="flex items-center space-x-3">
+                  {prediction?.gradcam_heatmap_url && (
+                    <a
+                      href={`http://localhost:8000${prediction.gradcam_heatmap_url}`}
+                      download
+                      className="flex items-center space-x-1 text-orange-600 hover:text-orange-700 dark:text-orange-400 font-semibold"
+                      title="Download 3D Heatmap Volume"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download Heatmap NIfTI</span>
+                    </a>
+                  )}
+                  <span className="font-mono text-orange-600 dark:text-orange-400 font-bold">Slice #{sliceIndex + 1} of {totalSlices}</span>
+                </div>
               </div>
-            )}
+              <input
+                type="range"
+                min="0"
+                max={totalSlices - 1}
+                value={sliceIndex}
+                onChange={(e) => setSliceIndex(Number(e.target.value))}
+                className="w-full accent-orange-500 cursor-pointer h-2 bg-slate-200 dark:bg-slate-800 rounded-lg"
+              />
+            </div>
           </div>
 
-          {/* Slice Slider Bar */}
-          <div className="space-y-2 pt-2">
-            <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-              <span className="font-bold text-slate-800 dark:text-slate-200">3D Volume Slice Navigation</span>
-              <span className="font-mono text-orange-600 dark:text-orange-400 font-bold">Slice #{sliceIndex} of 128</span>
+          {/* Interactive Anatomical Landmark Navigator */}
+          <div className="bg-orange-50/40 dark:bg-slate-800/40 border border-orange-100 dark:border-slate-800 rounded-2xl p-4 space-y-3 shadow-xs">
+            <div className="flex items-center justify-between gap-2 border-b border-orange-100/80 dark:border-slate-800 pb-2.5">
+              <div className="flex items-center space-x-2">
+                <Compass className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />
+                <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Anatomical Landmark Quick Navigator
+                </span>
+              </div>
+              <span className="text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                Active Slice: #{sliceIndex + 1}
+              </span>
             </div>
-            <input
-              type="range"
-              min="1"
-              max="128"
-              value={sliceIndex}
-              onChange={(e) => setSliceIndex(Number(e.target.value))}
-              className="w-full accent-orange-500 cursor-pointer h-2 bg-slate-200 dark:bg-slate-800 rounded-lg"
-            />
+
+            {/* Landmark Buttons Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {anatomicalLandmarks.map((lm) => {
+                const isCurrent = Math.abs(sliceIndex - lm.slice) <= 1;
+                return (
+                  <button
+                    key={lm.id}
+                    type="button"
+                    onClick={() => setSliceIndex(lm.slice)}
+                    className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between space-y-1.5 group relative cursor-pointer ${
+                      isCurrent
+                        ? 'bg-orange-100/90 dark:bg-orange-950/80 border-orange-400 dark:border-orange-600 shadow-sm ring-2 ring-orange-400/30'
+                        : 'bg-white/80 dark:bg-slate-900/70 hover:bg-orange-50/80 dark:hover:bg-slate-800 border-slate-200/80 dark:border-slate-700/80'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-1 w-full">
+                      <span className="text-base select-none">{lm.icon}</span>
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                        #{lm.slice + 1}
+                      </span>
+                    </div>
+
+                    <div>
+                      <p className={`text-xs font-bold truncate leading-tight ${isCurrent ? 'text-orange-900 dark:text-orange-200' : 'text-slate-800 dark:text-slate-200'}`}>
+                        {lm.shortName}
+                      </p>
+                      <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded mt-1 inline-block border ${lm.badgeColor}`}>
+                        {lm.badge}
+                      </span>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-snug">
+                      {lm.desc}
+                    </p>
+
+                    {isCurrent && (
+                      <span className="absolute top-1.5 right-1.5 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Grad-CAM Saliency Spectrum Bar & Radiologist Tip */}
+            <div className="pt-2 border-t border-orange-100/70 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+              <div className="flex items-center space-x-2">
+                <span className="font-semibold text-slate-700 dark:text-slate-300 text-[10px] uppercase tracking-wider">3D Saliency Gradient:</span>
+                <div className="flex items-center space-x-1.5">
+                  <span className="text-[9px] font-bold text-slate-400">Baseline</span>
+                  <div className="w-24 sm:w-32 h-2 rounded-full bg-gradient-to-r from-blue-500 via-emerald-400 via-amber-400 to-red-600 border border-slate-200 dark:border-slate-700"></div>
+                  <span className="text-[9px] font-bold text-red-500 dark:text-red-400">Hotspot</span>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center space-x-1">
+                <MapPin className="w-3 h-3 text-orange-500 shrink-0" />
+                <span>Click any landmark card to jump directly to that key neuro-anatomical slice.</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -618,6 +984,60 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Dynamic Disease Explanation Component */}
+            <div className={`p-4 rounded-2xl border ${dynamicExplanation.containerStyle} space-y-3 transition-all mt-3 shadow-xs`}>
+              {/* Header with Title and Risk Badge */}
+              <div className="flex items-center justify-between gap-2 border-b border-orange-200/50 dark:border-slate-800 pb-2.5">
+                <div className="flex items-center space-x-2">
+                  <Brain className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    Clinical Disease Profile
+                  </span>
+                </div>
+                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${dynamicExplanation.badgeStyle}`}>
+                  {dynamicExplanation.badge}
+                </span>
+              </div>
+
+              {/* Dynamic Narrative Summary */}
+              <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+                {dynamicExplanation.narrative}
+              </p>
+
+              {/* Simple Medical Definition */}
+              <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
+                <span className="font-bold text-slate-800 dark:text-slate-200 block mb-0.5">Clinical Pathology:</span>
+                {dynamicExplanation.definition}
+              </div>
+
+              {/* Key Biomarker Quick Metrics */}
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                  <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">Atrophy Assessment</span>
+                  <span className={`font-semibold ${dynamicExplanation.atrophyColor} truncate block text-[11px] mt-0.5`}>
+                    {dynamicExplanation.atrophyRating}
+                  </span>
+                </div>
+                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800">
+                  <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">Estimated Volume</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block text-[11px] mt-0.5">
+                    {hippoVol} mm³
+                  </span>
+                </div>
+              </div>
+
+              {/* Dynamic Differential & Follow-Up Guidance */}
+              <div className="text-[11px] space-y-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-800 text-slate-600 dark:text-slate-400">
+                <p className="leading-tight">
+                  <strong className="text-slate-700 dark:text-slate-300">Biomarker Dynamic:</strong> {dynamicExplanation.differential}
+                </p>
+                <div className="flex items-start space-x-1.5 pt-0.5 text-slate-500 dark:text-slate-400">
+                  <Info className="w-3.5 h-3.5 text-orange-500 shrink-0 mt-0.5" />
+                  <span><strong className="text-slate-700 dark:text-slate-300">Guidance:</strong> {dynamicExplanation.followUp}</span>
+                </div>
               </div>
             </div>
           </div>

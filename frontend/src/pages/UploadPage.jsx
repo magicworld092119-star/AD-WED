@@ -35,11 +35,13 @@ export default function UploadPage() {
   ];
 
   const handleFileChange = (selectedFile) => {
-    if (selectedFile && (selectedFile.name.endsWith('.nii') || selectedFile.name.endsWith('.nii.gz'))) {
+    if (!selectedFile) return;
+    const name = selectedFile.name.toLowerCase();
+    if (name.endsWith('.nii') || name.endsWith('.nii.gz') || name.endsWith('.gz')) {
       setFile(selectedFile);
       setErrorMessage('');
     } else {
-      setErrorMessage("Invalid file. Please select a valid NIfTI 3D Brain MRI scan (.nii or .nii.gz)");
+      setErrorMessage("Invalid file format. Please select a valid NIfTI 3D Brain MRI scan (.nii or .nii.gz)");
     }
   };
 
@@ -59,7 +61,7 @@ export default function UploadPage() {
       setProcessStep((prev) => (prev < steps.length - 1 ? prev + 1 : prev));
     }, 700);
 
-    try {
+    try {//api invokes it moves to predict api function
       const response = await predictAPI.uploadAndPredict(
         file, 
         patientId, 
@@ -173,7 +175,7 @@ export default function UploadPage() {
             >
               <input 
                 type="file" 
-                accept=".nii,.nii.gz" 
+                accept=".nii,.nii.gz,.gz,application/gzip,application/x-gzip,application/octet-stream" 
                 onChange={(e) => handleFileChange(e.target.files[0])} 
                 className="hidden" 
                 id="mri-upload-input"
@@ -195,7 +197,7 @@ export default function UploadPage() {
                   <div className="space-y-1">
                     <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">{t('uploadTitle')}</h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">{t('uploadDragDrop')}</p>
-                    <p className="text-[11px] text-slate-400 dark:text-slate-500">Structural 3D T1-weighted sMRI scan</p>
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500">Supports .nii and .nii.gz (Compressed NIfTI 3D Brain MRI)</p>
                   </div>
                 )}
               </label>

@@ -1,1 +1,20 @@
-{}
+{
+  "doctor@hospital.org": {
+    "id": "usr_demo01",
+    "email": "doctor@hospital.org",
+    "full_name": "Dr. Eleanor Vance",
+    "password": "$2b$12$AF2lTU6/g..Od8s9U2lgse1Ba.YH/32pg6VlyIIaJNhsA/S7Xhbui",
+    "role": "Chief Neuro-Radiologist",
+    "hospital_affiliation": "Global Memory & Neuroscience Center",
+    "created_at": "1710000000.0"
+  },
+  "tester_ci@hospital.org": {
+    "id": "usr_1b2d09cf",
+    "email": "tester_ci@hospital.org",
+    "full_name": "Test CI",
+    "password": "$2b$12$MXPmlUG5nEvvN83zV4p3/O/aR7O6oAu1KQzCQ0jg6UVGP5lKvVqmi",
+    "role": "Researcher",
+    "hospital_affiliation": "Test Hospital",
+    "created_at": "1784970916.0"
+  }
+}

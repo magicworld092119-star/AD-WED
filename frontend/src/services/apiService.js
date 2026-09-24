@@ -1,14 +1,22 @@
 import axios from 'axios';
 
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const API = axios.create({
-  baseURL: 'http://localhost:8000/api/v1',
+  baseURL: `${API_BASE_URL}/api/v1`,
+  timeout: 120000, // 2 minutes timeout for large 3D NIfTI scans & 3D GradCAM
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Attach authenticated user information to all outgoing requests
+// Attach authenticated user information and handle FormData correctly
 API.interceptors.request.use((config) => {
+  // If data is FormData, remove Content-Type so browser automatically generates multipart boundary
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
+
   try {
     const userStr = localStorage.getItem('ad_web_user');
     if (userStr) {
@@ -73,11 +81,9 @@ export const predictAPI = {
     if (uid) formData.append('user_id', uid);
     if (email) formData.append('user_email', email);
 
-    const response = await API.post('/predict', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
+    // Notice: Do NOT explicitly set 'Content-Type': 'multipart/form-data'.
+    // Axios / browser handles it automatically with the boundary parameter.
+    const response = await API.post('/predict', formData);
     return response.data;
   },
 };
@@ -106,6 +112,11 @@ export const historyAPI = {
     const response = await API.get('/history', { params });
     return response.data;
   },
+};
+
+export const getScanSliceUrl = (predictionId, plane = 'axial', sliceIdx = 48, heatmap = true, opacity = 75, colormap = 'turbo') => {
+  if (!predictionId) return null;
+  return `${API_BASE_URL}/api/v1/predict/${predictionId}/slice?plane=${plane.toLowerCase()}&slice_idx=${sliceIdx}&heatmap=${heatmap}&opacity=${opacity}&colormap=${colormap.toLowerCase()}`;
 };
 
 export default API;

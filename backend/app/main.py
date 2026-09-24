@@ -34,13 +34,26 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+from fastapi.staticfiles import StaticFiles
 
 # Add Global Exception Handlers
 add_exception_handlers(app)
+
+# Ensure storage directories exist
+settings.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+settings.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+settings.HEATMAPS_DIR.mkdir(parents=True, exist_ok=True)
+settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Mount static storage for downloads & heatmap NIfTI files
+app.mount("/storage", StaticFiles(directory=str(settings.STORAGE_DIR)), name="storage")
 
 # Register API Routes
 app.include_router(api_v1_router, prefix=settings.API_V1_STR)
@@ -52,3 +65,7 @@ def root():
         "docs": "/docs",
         "version": settings.VERSION
     }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)

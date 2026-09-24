@@ -29,7 +29,7 @@ function Footer() {
     </footer>
   );
 }
-
+//initial call from main.jsx
 export default function App() {
   return (
     <ThemeProvider>

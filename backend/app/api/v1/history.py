@@ -10,18 +10,23 @@ async def save_history_record(record: dict):
 
 class HistoryItem(BaseModel):
     id: str
+    prediction_id: Optional[str] = None
     user_id: Optional[str] = None
     user_email: Optional[str] = None
-    patient_id: str
-    patient_age: str
-    gender: str
-    scan_date: str
-    filename: str
-    predicted_stage: str
-    confidence_score: float
-    status: str
-    hippocampus_volume_mm3: float
-    probabilities: dict
+    patient_id: Optional[str] = "Unknown"
+    patient_age: Optional[str] = "70"
+    gender: Optional[str] = "Unspecified"
+    scan_date: Optional[str] = ""
+    filename: Optional[str] = ""
+    predicted_stage: Optional[str] = "Unknown"
+    confidence_score: Optional[float] = 0.0
+    status: Optional[str] = "Inference Completed"
+    hippocampus_volume_mm3: Optional[float] = 0.0
+    probabilities: Optional[dict] = {}
+    peak_slices: Optional[dict] = None
+    num_slices: Optional[int] = 96
+    gradcam_heatmap_url: Optional[str] = None
+    processed_mri_url: Optional[str] = None
 
 @router.get("/history", response_model=List[HistoryItem], tags=["Patient History"])
 async def get_scan_history(
@@ -31,7 +36,9 @@ async def get_scan_history(
     x_user_email: Optional[str] = Header(None, alias="X-User-Email")
 ):
     """
-    Retrieve user-isolated historical sMRI scan diagnostic records stored in system storage.
+    Retrieve historical sMRI scan diagnostic records stored in system storage.
+    If user_id or user_email is provided, records are filtered for that user.
+    If unauthenticated, returns guest/unassigned session records.
     """
     uid = user_id or x_user_id
     email = user_email or x_user_email
@@ -39,8 +46,19 @@ async def get_scan_history(
         uid = None
     if email in ("null", "undefined", "none", ""):
         email = None
-    if not uid and not email:
-        return []
     records = await db.get_history_records(user_id=uid, user_email=email)
+    
+    # Ensure backfilled IDs and URLs are populated for frontend compatibility
+    for r in records:
+        rec_id = r.get("id") or r.get("prediction_id") or "scan_unknown"
+        if not r.get("id"):
+            r["id"] = rec_id
+        if not r.get("prediction_id"):
+            r["prediction_id"] = rec_id
+        if not r.get("gradcam_heatmap_url"):
+            r["gradcam_heatmap_url"] = f"/storage/heatmaps/{rec_id}_heatmap.nii.gz"
+        if not r.get("processed_mri_url") and r.get("filename"):
+            r["processed_mri_url"] = f"/storage/uploads/{rec_id}_{r['filename']}"
+
     return records
 

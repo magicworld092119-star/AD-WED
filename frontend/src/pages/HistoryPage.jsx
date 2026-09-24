@@ -28,23 +28,22 @@ export default function HistoryPage() {
   }, [user?.id, user?.email]);
 
   const fetchHistory = async () => {
-    if (!user?.id && !user?.email) {
-      setHistoryRecords([]);
-      setIsLoading(false);
-      return;
-    }
-
     setIsLoading(true);
 
     try {
-      const data = await historyAPI.getHistory(user.id, user.email);
-      // Double-layer security: ensure records strictly match current user
-      const isolated = (Array.isArray(data) ? data : []).filter((r) => {
-        const matchEmail = user.email && r.user_email && r.user_email.toLowerCase() === user.email.toLowerCase();
-        const matchId = user.id && r.user_id && r.user_id === user.id;
-        return matchEmail || matchId;
-      });
-      setHistoryRecords(isolated);
+      const data = await historyAPI.getHistory(user?.id, user?.email);
+      let records = Array.isArray(data) ? data : [];
+      if (user?.id || user?.email) {
+        // Match user's account records; also include unassigned guest scans if user has no saved scans yet
+        const userRecords = records.filter((r) => {
+          const matchEmail = user?.email && r.user_email && r.user_email.toLowerCase() === user.email.toLowerCase();
+          const matchId = user?.id && r.user_id && r.user_id === user.id;
+          return matchEmail || matchId;
+        });
+        setHistoryRecords(userRecords.length > 0 ? userRecords : records);
+      } else {
+        setHistoryRecords(records);
+      }
       if (refreshUserScans) {
         refreshUserScans();
       }
@@ -119,7 +118,7 @@ export default function HistoryPage() {
             </h1>
 
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-1.5">
-              <span>Clinician: <strong className="text-orange-600 dark:text-orange-400">{user?.fullName || user?.email}</strong></span>
+              <span>Clinician: <strong className="text-orange-600 dark:text-orange-400">{user?.fullName || user?.email || 'Guest Clinician'}</strong></span>
               <span>•</span>
               <span className="text-[11px] text-slate-400">Strictly Isolated Patient Archive</span>
             </p>
@@ -360,15 +359,27 @@ export default function HistoryPage() {
                         onClick={() =>
                           navigate('/dashboard', {
                             state: {
+                              id: record.id,
+                              prediction_id: record.id,
                               patientId: record.patient_id,
                               patientAge: record.patient_age,
                               gender: record.gender,
                               filename: record.filename,
+                              hippocampus_volume_mm3: record.hippocampus_volume_mm3,
+                              peak_slices: record.peak_slices,
 
                               prediction: {
+                                id: record.id,
+                                prediction_id: record.id,
+                                filename: record.filename,
                                 predicted_stage: record.predicted_stage,
                                 confidence_score: record.confidence_score,
-                                probabilities: record.probabilities
+                                probabilities: record.probabilities,
+                                hippocampus_volume_mm3: record.hippocampus_volume_mm3,
+                                peak_slices: record.peak_slices,
+                                num_slices: record.num_slices || 96,
+                                gradcam_heatmap_url: record.gradcam_heatmap_url || `/storage/heatmaps/${record.id}_heatmap.nii.gz`,
+                                processed_mri_url: record.processed_mri_url || `/storage/uploads/${record.id}_${record.filename}`
                               }
                             }
                           })

@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, Field
 
 class StageProbability(BaseModel):
@@ -13,4 +14,7 @@ class PredictionResponse(BaseModel):
     probabilities: StageProbability
     gradcam_heatmap_url: str
     processed_mri_url: str
+    num_slices: int = 96
+    hippocampus_volume_mm3: Optional[float] = None
+    peak_slices: Optional[dict[str, int]] = None
     message: str = "Inference completed successfully"
