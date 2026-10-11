@@ -50,30 +50,32 @@ export default function Navbar() {
       <header className={`pointer-events-auto w-full max-w-5xl rounded-2xl transition-all duration-300 backdrop-blur-[16px] border px-5 py-2.5 sm:px-6 shadow-sm flex flex-col ${scrolled ? 'bg-white/85 dark:bg-slate-900/85 border-orange-200/80 dark:border-orange-900/60 shadow-md' : 'bg-white/65 dark:bg-slate-900/65 border-orange-200/40 dark:border-orange-900/30'}`}>
         <div className="flex items-center justify-between w-full">
           
-      {/* Brand Logo */}
-<Link to="/" className="flex items-center space-x-3 group shrink-0">
-  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-500 to-amber-500 flex items-center justify-center text-white shadow-md shadow-orange-500/20 group-hover:scale-105 transition-transform">
-    <Brain className="w-5 h-5" />
-  </div>
+        {/* Brand Logo */}
+        <Link to="/" className="flex items-center space-x-3 group shrink-0">
+          <div className="relative w-10 h-10 rounded-xl bg-orange-500/10 dark:bg-orange-500/20 border border-orange-200/60 dark:border-orange-800/60 flex items-center justify-center p-1 shadow-sm group-hover:scale-105 group-hover:shadow-orange-500/20 transition-all duration-300">
+            <img
+              src="/logo.png"
+              alt="AD-WEB"
+              className="w-full h-full object-contain filter drop-shadow-[0_2px_8px_rgba(249,115,22,0.45)]"
+            />
+          </div>
 
-  <div className="flex flex-col justify-center">
+          <div className="flex flex-col justify-center">
+            <span
+              className="text-xl font-extrabold tracking-[-0.05em] bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 bg-clip-text text-transparent leading-none mb-0.5"
+              style={{
+                fontFamily: "'Sora', sans-serif",
+                fontWeight: 800,
+              }}
+            >
+              AD-WEB
+            </span>
 
-    <span
-      className="text-xl font-extrabold tracking-[-0.05em] bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 bg-clip-text text-transparent leading-none mb-0.5"
-      style={{
-        fontFamily: "'Sora', sans-serif",
-        fontWeight: 800,
-      }}
-    >
-      AD-WEB
-    </span>
-
-    <span className="text-[9px] uppercase font-mono font-medium tracking-widest text-slate-500 dark:text-slate-400 leading-none">
-      Explainable AI • 3D MRI
-    </span>
-
-  </div>
-</Link>
+            <span className="text-[9px] uppercase font-mono font-medium tracking-widest text-slate-500 dark:text-slate-400 leading-none">
+              Explainable AI • 3D MRI
+            </span>
+          </div>
+        </Link>
 
           {/* Desktop Navigation Links */}
           <nav className="hidden md:flex items-center space-x-6 ml-4">
