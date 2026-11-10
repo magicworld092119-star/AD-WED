@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     DEFAULT_MODEL_NAME: str = "best_densenet121_3d.pth"
     INPUT_SHAPE: tuple = (1, 96, 96, 96)
     
+    # Google Gemini LLM for Dynamic Clinical Reporting
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+    
     # CORS
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:3000",

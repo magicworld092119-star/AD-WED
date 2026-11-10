@@ -14,6 +14,7 @@ import HistoryPage from './pages/HistoryPage';
 import ProfilePage from './pages/ProfilePage';
 import AboutPage from './pages/AboutPage';
 import AgenticBackground from './components/AgenticBackground';
+import ScanChatWidget from './components/ScanChatWidget';
 
 function Footer() {
   const { t } = useLanguage();
@@ -91,6 +92,9 @@ export default function App() {
                 {/* Global Footer */}
                 <Footer />
               </div>
+
+              {/* Global Corner AI Chatbot across all pages */}
+              <ScanChatWidget />
             </div>
           </Router>
         </AuthProvider>

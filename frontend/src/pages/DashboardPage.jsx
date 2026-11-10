@@ -14,10 +14,12 @@ import {
   AlertCircle,
   Compass,
   MapPin,
-  Info
+  Info,
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
-import { getScanSliceUrl } from '../services/apiService';
+import { getScanSliceUrl, predictAPI } from '../services/apiService';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -33,13 +35,13 @@ export default function DashboardPage() {
     if (location.state && (location.state.prediction || location.state.patientId)) {
       try {
         sessionStorage.setItem(storageKey, JSON.stringify(location.state));
-      } catch (e) {}
+      } catch (e) { }
       return location.state;
     }
     try {
       const saved = sessionStorage.getItem(storageKey);
       if (saved) return JSON.parse(saved);
-    } catch (e) {}
+    } catch (e) { }
     return {};
   });
 
@@ -48,7 +50,7 @@ export default function DashboardPage() {
     if (location.state && (location.state.prediction || location.state.patientId)) {
       try {
         sessionStorage.setItem(storageKey, JSON.stringify(location.state));
-      } catch (e) {}
+      } catch (e) { }
       setScanData(location.state);
     } else {
       try {
@@ -76,6 +78,8 @@ export default function DashboardPage() {
   const [colormap, setColormap] = useState('turbo');
   const [imageError, setImageError] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [explainTarget, setExplainTarget] = useState('predicted');
+  const [saliencyProfile, setSaliencyProfile] = useState(null);
 
   const predId =
     prediction?.prediction_id ||
@@ -84,7 +88,7 @@ export default function DashboardPage() {
     scanData?.id ||
     (patientId && patientId.startsWith("scan_") ? patientId : null);
   const sliceUrl = predId
-    ? getScanSliceUrl(predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap)
+    ? getScanSliceUrl(predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap, explainTarget)
     : null;
 
   const handlePlaneChange = (newPlane) => {
@@ -135,20 +139,95 @@ export default function DashboardPage() {
     { stage: 'AD', name: t('dashStageAD'), probability: Number((probs.ad * 100).toFixed(1)), color: '#ea580c' }
   ];
 
+  const adProbability = probabilitiesData.find(p => p.stage === 'AD')?.probability ?? Number((probs.ad * 100).toFixed(1));
+
   const hippoVol = prediction?.hippocampus_volume_mm3 || scanData.hippocampus_volume_mm3 || (stage.includes('AD') ? '2100.0' : stage.includes('MCI') ? '2800.0' : '3600.0');
 
-  // Compute rich, dynamic clinical explanation tailored to active prediction metrics
+  // Google Gemini-powered dynamic clinical assessment state
+  const [geminiProfile, setGeminiProfile] = useState(() => {
+    return prediction?.ai_clinical_profile || scanData?.ai_clinical_profile || null;
+  });
+  const [isGeneratingGemini, setIsGeneratingGemini] = useState(false);
+
+  const fetchGeminiProfile = async (forceRegenerate = false) => {
+    setIsGeneratingGemini(true);
+    try {
+      const data = await predictAPI.generateClinicalProfile({
+        stage: stage,
+        confidence: Number(confScore),
+        probabilities: probs,
+        hippocampus_volume_mm3: Number(hippoVol),
+        patient_id: patientId || "Anonymous",
+        patient_age: patientAge || "70",
+        gender: gender || "Unspecified",
+        peak_slices: peakSlices,
+        variation_seed: forceRegenerate ? Date.now() : undefined
+      });
+      if (data) {
+        setGeminiProfile(data);
+        try {
+          const current = JSON.parse(sessionStorage.getItem(storageKey) || '{}');
+          current.ai_clinical_profile = data;
+          sessionStorage.setItem(storageKey, JSON.stringify(current));
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn("Failed to generate Gemini profile:", err);
+    } finally {
+      setIsGeneratingGemini(false);
+    }
+  };
+
+  useEffect(() => {
+    // Automatically fetch dynamic 5-section clinical report from Google Gemini LLM
+    const cp = geminiProfile?.clinical_profile;
+    const hasStaleColorText = /\b(red|yellow)\b/i.test(cp?.where_seen || '');
+    const hasNewFormat = Boolean(
+      cp?.disease &&
+      cp?.where_seen &&
+      !hasStaleColorText &&
+      cp?.causes_breakdown?.brain_changes &&
+      cp?.causes_breakdown?.treatable_risks &&
+      Array.isArray(cp?.prevention_tips) &&
+      cp.prevention_tips.some((tip) => typeof tip === 'string' && tip.includes(':'))
+    );
+    if (!geminiProfile || geminiProfile?.source !== 'gemini' || !hasNewFormat) {
+      fetchGeminiProfile();
+    }
+  }, [predId]);
+
+  useEffect(() => {
+    if (!predId) return;
+    let active = true;
+    predictAPI
+      .getSaliencyProfile(predId, explainTarget)
+      .then((data) => {
+        if (active && data) setSaliencyProfile(data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [predId, explainTarget]);
+
+  const STANDARD_DISCLAIMER =
+    'This report was generated by a research decision-support tool. It is not a medical diagnosis and does not replace evaluation by a qualified healthcare professional. Please consult a neurologist.';
+
+  const DEFAULT_PREVENTION_TIPS = [
+    'Stay active: Engage in regular walking or aerobic exercise',
+    'Brain-healthy diet: Eat a balanced, Mediterranean-style diet',
+    'Heart & metabolic care: Control blood pressure, blood sugar, and cholesterol',
+    'Quality sleep: Sleep well and avoid smoking or heavy alcohol use',
+    'Mental & social life: Stay mentally engaged and socially connected',
+    'Health checkups: Treat hearing loss and depression early',
+    'Head safety: Protect your head from falls and injury'
+  ];
+
+  // Compute clean 5-section fallback defaults tailored to active prediction stage
   const dynamicExplanation = React.useMemo(() => {
     const s = (stage || '').toUpperCase();
     const isCN = s.includes('CN') || s.includes('NORMAL');
     const isMCI = s.includes('MCI') || s.includes('MILD');
-    const isAD = !isCN && !isMCI;
-
-    const sorted = [...probabilitiesData].sort((a, b) => b.probability - a.probability);
-    const primary = sorted[0] || { stage: 'AD', probability: 80 };
-    const runnerUp = sorted[1] || { stage: 'MCI', probability: 15 };
-    const probMargin = (primary.probability - runnerUp.probability).toFixed(1);
-    const numHippo = parseFloat(hippoVol) || (isAD ? 2100 : isMCI ? 2800 : 3600);
 
     if (isCN) {
       return {
@@ -156,17 +235,15 @@ export default function DashboardPage() {
         stageName: 'Cognitively Normal (CN)',
         badge: 'Healthy / Low Risk',
         badgeStyle: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
-        containerStyle: 'bg-gradient-to-br from-emerald-50/70 to-teal-50/40 dark:from-emerald-950/20 dark:to-teal-950/10 border-emerald-200/80 dark:border-emerald-900/50',
-        headerColor: 'text-emerald-800 dark:text-emerald-300',
-        atrophyRating: numHippo >= 3300 ? 'Normal Preserved Volume' : 'Borderline Age-Consistent',
-        atrophyColor: 'text-emerald-700 dark:text-emerald-400',
-        focalTarget: 'Cortical Baseline / Symmetrical Temporal Lobes',
-        followUp: 'Routine annual check-up (12-24 months)',
-        narrative: `Structural neuroimaging evaluates this scan at ${confScore}% confidence within the Cognitively Normal spectrum. Volumetric estimation indicates hippocampal volume is preserved at ${hippoVol} mm³, displaying no localized medial temporal lobe atrophy or compensatory ventricular expansion.`,
-        definition: 'CN reflects healthy neurocognitive architecture without significant amyloid plaque or neurofibrillary tau-associated neurodegeneration.',
-        differential: runnerUp.probability > 25
-          ? `Secondary probability of ${runnerUp.probability}% in ${runnerUp.stage} notes minor non-specific age changes, but primary biomarkers remain firmly normal.`
-          : `Pronounced classification margin (+${probMargin}% vs ${runnerUp.stage}) corroborates robust intact cortical preservation.`
+        containerStyle: 'bg-emerald-50 dark:bg-slate-900 border-emerald-200 dark:border-emerald-900/60',
+        bridgeBg: 'bg-emerald-50 dark:bg-slate-900',
+        whereSeen: 'Across the 3D scan, attention remains balanced across preserved medial temporal regions and the hippocampus (the brain area responsible for forming memories), with highlights shifting naturally across slices and views. This shows where the model focused, not confirmed tissue loss.',
+        whyItHappens: 'A Cognitively Normal pattern reflects healthy brain aging without significant Alzheimer’s-related protein build-up or vascular damage.',
+        brainChanges: 'Memory-related brain networks appear well preserved without significant protein plaque buildup or vascular tissue injury.',
+        treatableRisks: 'Older age, high blood pressure, diabetes, cholesterol, and sleep habits still influence long-term brain health and are worth monitoring.',
+        preventionTips: DEFAULT_PREVENTION_TIPS,
+        disclaimer: STANDARD_DISCLAIMER,
+        adFallbackNarrative: `Virtually no structural indicators resembling Alzheimer's pathology detected (${adProbability}%).`
       };
     } else if (isMCI) {
       return {
@@ -174,36 +251,52 @@ export default function DashboardPage() {
         stageName: 'Mild Cognitive Impairment (MCI)',
         badge: 'Prodromal / Moderate Risk',
         badgeStyle: 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border-amber-300 dark:border-amber-800',
-        containerStyle: 'bg-gradient-to-br from-amber-50/70 to-orange-50/40 dark:from-amber-950/20 dark:to-orange-950/10 border-amber-200/80 dark:border-amber-900/50',
-        headerColor: 'text-amber-800 dark:text-amber-300',
-        atrophyRating: numHippo < 2600 ? 'Moderate Hippocampal Thinning' : 'Mild Focal Volume Loss',
-        atrophyColor: 'text-amber-700 dark:text-amber-400',
-        focalTarget: 'Entorhinal Cortex & Hippocampal Formations',
-        followUp: 'Serial surveillance neuroimaging in 6-12 months',
-        narrative: `Inference detects early neurostructural alterations characteristic of Mild Cognitive Impairment (${confScore}% confidence). Hippocampus volumetry measures approx. ${hippoVol} mm³, exhibiting mild-to-moderate thinning and early ventricular divergence.`,
-        definition: 'MCI represents an intermediate prodromal transition between normal cognitive aging and clinical dementia; daily functional autonomy is largely preserved while subtle memory deficits emerge.',
-        differential: runnerUp.stage === 'AD' && runnerUp.probability > 20
-          ? `A notable ${runnerUp.probability}% probability for AD flags elevated risk of longitudinal conversion; clinical monitoring is strongly advised.`
-          : `Distinguished by a ${probMargin}% probability lead over ${runnerUp.stage}, maintaining current classification within the prodromal phase.`
+        containerStyle: 'bg-amber-50 dark:bg-slate-900 border-amber-200 dark:border-amber-900/60',
+        bridgeBg: 'bg-amber-50 dark:bg-slate-900',
+        whereSeen: "Across the 3D scan, the model's strongest overall attention centers on the medial temporal region and areas around the hippocampus (the brain area responsible for forming memories), with hotspot locations shifting as you move through slices. This shows where the model focused, not confirmed tissue loss.",
+        whyItHappens: 'MCI can stem from early Alzheimer’s-related changes, reduced cerebral blood flow, or other medical factors.',
+        brainChanges: 'Early buildup of amyloid or tau proteins and reduced blood circulation can disrupt signaling in memory pathways.',
+        treatableRisks: 'High blood pressure, diabetes, cholesterol, sleep disorders, and vitamin (B12) or thyroid imbalances are important manageable contributors.',
+        preventionTips: DEFAULT_PREVENTION_TIPS,
+        disclaimer: STANDARD_DISCLAIMER,
+        adFallbackNarrative: `The model detected ${adProbability}% Alzheimer's-like structural features alongside primary Mild Cognitive Impairment (MCI). Early detection creates a window for timely monitoring and preventive care.`
       };
     } else {
       return {
         key: 'AD',
         stageName: "Alzheimer's Disease (AD)",
-        badge: 'Advanced / High Risk',
+        badge: 'High Risk',
         badgeStyle: 'bg-orange-100 text-orange-800 dark:bg-orange-950/70 dark:text-orange-300 border-orange-300 dark:border-orange-800',
-        containerStyle: 'bg-gradient-to-br from-orange-50/70 to-red-50/40 dark:from-orange-950/20 dark:to-red-950/10 border-orange-200/80 dark:border-orange-900/50',
-        headerColor: 'text-orange-800 dark:text-orange-300',
-        atrophyRating: numHippo < 2300 ? 'Severe Bilateral Atrophy' : 'Significant Volumetric Loss',
-        atrophyColor: 'text-orange-700 dark:text-orange-400',
-        focalTarget: 'Medial Temporal Lobe & Lateral Ventricles',
-        followUp: 'Neurological evaluation & therapeutic care plan',
-        narrative: `Neuroimaging features exhibit hallmark morphological biomarkers of Alzheimer's Disease with ${confScore}% confidence. Quantitative assessment identifies significant hippocampal reduction down to ${hippoVol} mm³, alongside prominent compensatory ventricular dilation and cortical thinning.`,
-        definition: "Alzheimer's Disease is a progressive neurodegenerative disorder caused by amyloid-beta plaques and hyperphosphorylated tau neurofibrillary tangles, impairing memory, reasoning, and functional independence.",
-        differential: `High classification confidence (+${probMargin}% lead over ${runnerUp.stage}) indicates definitive multi-region structural neurodegeneration.`
+        containerStyle: 'bg-orange-50 dark:bg-slate-900 border-orange-200 dark:border-orange-900/60',
+        bridgeBg: 'bg-orange-50 dark:bg-slate-900',
+        whereSeen: "Across the 3D scan, the model's strongest overall attention centers on the medial temporal lobe, hippocampus (the brain area responsible for forming memories), and surrounding fluid spaces, shifting as you navigate slices and views. This shows where the model focused, not confirmed tissue loss.",
+        whyItHappens: "Alzheimer's Disease is driven by amyloid plaque and tau protein buildup that impairs nerve cell communication.",
+        brainChanges: 'Abnormal amyloid plaques and tau tangles progressively injure nerve cells, often alongside reduced brain blood flow.',
+        treatableRisks: 'Age and family history raise risk, while blood pressure, diabetes, cholesterol, sleep, and mood/hearing care remain important to manage.',
+        preventionTips: DEFAULT_PREVENTION_TIPS,
+        disclaimer: STANDARD_DISCLAIMER,
+        adFallbackNarrative: `The model detected a primary Alzheimer's Disease signature (${adProbability}%). Prompt neurological follow-up is recommended.`
       };
     }
-  }, [stage, confScore, hippoVol, probabilitiesData]);
+  }, [stage, adProbability]);
+
+  // Unified 5-section report content (prefers Gemini output, falls back cleanly)
+  const reportSections = React.useMemo(() => {
+    const cp = geminiProfile?.clinical_profile || {};
+    const cb = cp.causes_breakdown || {};
+    return {
+      disease: cp.disease || dynamicExplanation.stageName,
+      whereSeen: cp.where_seen || dynamicExplanation.whereSeen,
+      whyItHappens: cp.why_it_happens || dynamicExplanation.whyItHappens,
+      causesBrainChanges: cb.brain_changes || dynamicExplanation.brainChanges,
+      causesTreatableRisks: cb.treatable_risks || dynamicExplanation.treatableRisks,
+      preventionTips:
+        Array.isArray(cp.prevention_tips) && cp.prevention_tips.length > 0
+          ? cp.prevention_tips
+          : dynamicExplanation.preventionTips,
+      disclaimer: STANDARD_DISCLAIMER
+    };
+  }, [geminiProfile, dynamicExplanation]);
 
   // Key neuro-anatomical landmark slices for rapid PACS/radiological navigation
   const anatomicalLandmarks = React.useMemo(() => {
@@ -341,6 +434,92 @@ export default function DashboardPage() {
       ];
     }
   }, [plane, peakSlices]);
+
+  // Live description synced with slice slider, true slice intensity, plane, colormap & channel
+  const liveFocusInfo = React.useMemo(() => {
+    const planeLabel = plane.charAt(0).toUpperCase() + plane.slice(1);
+    const closestLandmark = anatomicalLandmarks.find((lm) => Math.abs(lm.slice - sliceIndex) <= 3);
+    const regionLabel = closestLandmark ? closestLandmark.name : `${planeLabel} cross-section`;
+
+    const channelMap = {
+      predicted: `Winner (${stage.includes('CN') ? 'CN' : stage.includes('MCI') ? 'MCI' : 'AD'})`,
+      ad: 'AD Focus',
+      mci: 'MCI Focus',
+      cn: 'CN Focus'
+    };
+    const channelLabel = channelMap[explainTarget] || 'Primary Focus';
+
+    const planeScores = saliencyProfile?.[plane];
+    const slicePeak = Array.isArray(planeScores) ? planeScores[sliceIndex] : undefined;
+    let peakSliceNum = (peakSlices?.[plane] ?? 47) + 1;
+    if (Array.isArray(planeScores) && planeScores.length > 0) {
+      let bestIdx = 0;
+      for (let i = 1; i < planeScores.length; i++) {
+        if (planeScores[i] > planeScores[bestIdx]) bestIdx = i;
+      }
+      peakSliceNum = bestIdx + 1;
+    }
+
+    let intensityText = `Inspecting ${channelLabel} attention on this slice.`;
+    if (!showHeatmap) {
+      intensityText = 'Heatmap overlay is currently hidden.';
+    } else if (typeof slicePeak === 'number') {
+      if (slicePeak <= 0.01) {
+        intensityText = `No significant heatmap activation on this slice (peak focus is near Slice #${peakSliceNum}).`;
+      } else if (slicePeak < 0.35) {
+        const lowColor =
+          colormap === 'inferno'
+            ? 'dark purple tint — no bright hotspots here'
+            : colormap === 'hot'
+            ? 'dim red tint — no bright yellow/white hotspots here'
+            : 'blue/cyan/green tint — no red or yellow hotspots here';
+        intensityText = `Low activation only (${lowColor}; peak focus is near Slice #${peakSliceNum}).`;
+      } else if (slicePeak < 0.65) {
+        const midColor =
+          colormap === 'inferno'
+            ? 'magenta to orange — below peak bright yellow level'
+            : colormap === 'hot'
+            ? 'red to orange — below peak yellow/white level'
+            : 'green to yellow-green — below peak red hotspot level';
+        intensityText = `Moderate activation (${midColor} near Slice #${peakSliceNum}).`;
+      } else {
+        const highColor =
+          colormap === 'inferno'
+            ? 'bright yellow/orange'
+            : colormap === 'hot'
+            ? 'bright yellow/white'
+            : 'warm red/orange/yellow';
+        intensityText = `Strong attention hotspot visible in ${highColor} (${channelLabel}).`;
+      }
+    }
+
+    const liveNote = `Current view (${planeLabel} #${sliceIndex + 1} — ${regionLabel}): ${intensityText}`;
+    return { planeLabel, channelLabel, liveNote };
+  }, [plane, sliceIndex, anatomicalLandmarks, explainTarget, stage, colormap, showHeatmap, saliencyProfile, peakSlices]);
+
+  useEffect(() => {
+    const viewer = {
+      plane: liveFocusInfo.planeLabel,
+      slice_number: sliceIndex + 1,
+      channel: liveFocusInfo.channelLabel,
+      colormap,
+      slice_note: liveFocusInfo.liveNote
+    };
+    try {
+      sessionStorage.setItem('ad_live_viewer_context', JSON.stringify(viewer));
+    } catch (e) {}
+    window.dispatchEvent(
+      new CustomEvent('ad-scan-context-update', {
+        detail: {
+          prediction_id: predId,
+          stage,
+          confidence: Number(confScore),
+          probabilities: probs,
+          viewer
+        }
+      })
+    );
+  }, [predId, stage, confScore, probs, sliceIndex, colormap, liveFocusInfo]);
 
   const generateReportHtml = () => {
     const reportDate = new Date().toLocaleString();
@@ -531,25 +710,46 @@ export default function DashboardPage() {
     </table>
   </div>
 
-  <div class="card">
-    <div class="card-title">Volumetric & Explainability Biomarkers</div>
-    <div class="grid-2">
-      <div class="info-item">
-        <span class="info-label">Estimated Hippocampus Volume</span>
-        <span class="info-value">${hippoVol} mm³</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">3D Grad-CAM Attention</span>
-        <span class="info-value">Medial Temporal Lobe & Ventricles</span>
-      </div>
+  <div class="card" style="border-left: 4px solid ${adProbability >= 20 ? '#dc2626' : adProbability >= 1 ? '#d97706' : '#10b981'}; background: ${adProbability >= 1 ? '#fffbeb' : '#f0fdf4'};">
+    <div class="card-title" style="color: ${adProbability >= 20 ? '#dc2626' : adProbability >= 1 ? '#b45309' : '#047857'}; margin-bottom: 6px;">
+      ${geminiProfile?.ad_signal?.title || (adProbability >= 1 ? '⚠️ ALZHEIMER’S DISEASE (AD) RISK & EARLY BIOMARKER ASSESSMENT' : '✓ ALZHEIMER’S DISEASE (AD) RISK STATUS')}
     </div>
-    <div class="findings">
-      <strong>Clinical AI Assessment:</strong> 
-      ${stage.includes('AD')
-        ? 'Significant hippocampal volume reduction and bilateral temporal horn enlargement detected, consistent with neuropathological changes of Alzheimer’s Disease.'
-        : stage.includes('MCI')
-        ? 'Moderate temporal cortical thinning and subtle hippocampal asymmetry observed, suggesting early prodromal neurodegenerative alterations (MCI).'
-        : 'Preserved hippocampal volume and normal ventricular symmetry with no signs of pathological neurodegeneration.'}
+    <div style="font-size: 13px; line-height: 1.6; color: #1e293b;">
+      ${geminiProfile?.ad_signal?.narrative || (adProbability >= 1 
+        ? `<strong>AD Structural Biomarkers Detected (${adProbability}%):</strong> While the primary inference is <strong>${stage}</strong>, the neural network detected <strong>${adProbability}%</strong> structural indicators matching Alzheimer’s Disease pathology (including medial temporal cortical thinning and hippocampal volumetric alterations). Flagging AD even at early/mild percentages (&ge;1%) provides a critical window for clinical surveillance and preventative therapeutic strategies before irreversible progression.`
+        : `<strong>Low AD Risk (&lt;1%):</strong> Virtually zero structural biomarkers of Alzheimer’s Disease detected (${adProbability}%). Architecture aligns with baseline normal aging.`
+      )}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Report</div>
+    <div class="info-item" style="margin-bottom: 12px;">
+      <span class="info-label">Disease</span>
+      <span class="info-value">${reportSections.disease}</span>
+    </div>
+    <div style="font-size: 13px; line-height: 1.65; color: #1e293b;">
+      <p style="margin-top: 0;"><strong>3D Scan Focus</strong><br/>${reportSections.whereSeen}</p>
+      <p style="margin-bottom: 4px;"><strong>Causes &amp; Risk Factors</strong></p>
+      <p style="margin-top: 0; margin-bottom: 6px;"><strong>Brain Changes:</strong> ${reportSections.causesBrainChanges}</p>
+      <p style="margin-top: 0;"><strong>Contributing &amp; Treatable Risks:</strong> ${reportSections.causesTreatableRisks}</p>
+      <p style="margin-bottom: 6px;"><strong>Prevention &amp; Risk Reduction</strong></p>
+      <ul style="margin-top: 0; margin-bottom: 0; padding-left: 18px;">
+        ${reportSections.preventionTips.map((tip) => {
+          const idx = tip.indexOf(':');
+          if (idx > 0 && idx < 40) {
+            return `<li><strong>${tip.slice(0, idx + 1)}</strong>${tip.slice(idx + 1)}</li>`;
+          }
+          return `<li>${tip}</li>`;
+        }).join('\n        ')}
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35); color: #991b1b;">
+    <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; color: #b91c1c;">Disclaimer</div>
+    <div style="font-size: 12.5px; line-height: 1.55;">
+      ${reportSections.disclaimer}
     </div>
   </div>
 
@@ -563,7 +763,7 @@ export default function DashboardPage() {
   </div>
 
   <div class="footer">
-    Notice: This automated report is generated by the AD-WEB Deep Learning Classification Pipeline as an assistive diagnostic tool. Final clinical diagnosis should be established by a licensed physician in conjunction with clinical evaluations.
+    ${reportSections.disclaimer}
   </div>
 </body>
 </html>`;
@@ -588,11 +788,10 @@ export default function DashboardPage() {
 
   const handleDownloadTextReport = () => {
     const reportDate = new Date().toLocaleString();
-    const hippoVol = prediction?.hippocampus_volume_mm3 || scanData.hippocampus_volume_mm3 || (stage.includes('AD') ? '2100.0' : stage.includes('MCI') ? '2800.0' : '3600.0');
+    const preventionList = reportSections.preventionTips.map((tip) => `- ${tip}`).join('\n');
 
     const content = `=====================================================
 AD-WEB CLINICAL AI DIAGNOSTIC REPORT
-Alzheimer's Disease Detection & Neuro-Informatics System
 Generated: ${reportDate}
 =====================================================
 
@@ -602,28 +801,29 @@ PATIENT INFORMATION:
 - Gender: ${gender}
 - Input Scan File: ${filename || '3D_sMRI_Scan.nii'}
 
-AI INFERENCE RESULTS:
-- Primary Predicted Stage: ${stage}
-- Confidence Score: ${confScore}%
-- Stage Probabilities:
-  * Cognitively Normal (CN): ${probabilitiesData[0].probability}%
-  * Mild Cognitive Impairment (MCI): ${probabilitiesData[1].probability}%
-  * Alzheimer's Disease (AD): ${probabilitiesData[2].probability}%
+PROBABILITY BREAKDOWN:
+- Cognitively Normal (CN): ${probabilitiesData[0].probability}%
+- Mild Cognitive Impairment (MCI): ${probabilitiesData[1].probability}%
+- Alzheimer's Disease (AD): ${probabilitiesData[2].probability}%
 
-BIOMARKER & EXPLAINABILITY FINDINGS:
-- Estimated Hippocampus Volume: ${hippoVol} mm³
-- 3D Grad-CAM Explainability: Generated & Validated
-- Salient Attention Focus: Medial Temporal Lobe, Hippocampal Formation, Lateral Ventricles
+Report
 
-CLINICAL RECOMMENDATION:
-${stage.includes('AD')
-  ? 'High atrophy index identified in medial temporal lobe. Immediate comprehensive cognitive neurological follow-up recommended.'
-  : stage.includes('MCI')
-  ? 'Mild ventricular enlargement and borderline hippocampal volume. Serial follow-up MRI in 6 months recommended.'
-  : 'Volumetric profiles within normal limits. Routine age-adjusted cognitive screening.'}
+Disease: ${reportSections.disease}
 
+Where it is seen in the 3D image
+${reportSections.whereSeen}
+
+Causes & Risk Factors
+- Brain Changes: ${reportSections.causesBrainChanges}
+- Contributing & Treatable Risks: ${reportSections.causesTreatableRisks}
+
+How to prevent or lower the risk
+${preventionList}
+
+-----------------------------------------------------
+Disclaimer
+${reportSections.disclaimer}
 =====================================================
-CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
 `;
 
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -682,11 +882,11 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
       </div>
 
 
-      {/* Main 2-Column Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Main 3-Col Grid with Connected Reverse-L Report + Prevention */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-y-6 lg:gap-x-0">
 
-        {/* Left 2-Cols: Interactive MRI + GradCAM Slice Viewer */}
-        <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-4 shadow-sm flex flex-col">
+        {/* Top-Left (2 Cols, Rows 1-2): Interactive MRI + GradCAM Slice Viewer */}
+        <div className="lg:col-span-2 lg:row-start-1 lg:row-end-3 lg:mr-6 bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-4 shadow-sm flex flex-col">
 
           {/* Viewport Control Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-orange-100 dark:border-slate-800 pb-4">
@@ -768,6 +968,65 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
             </div>
           </div>
 
+          {/* Target Disease Focus Selector (Explainability Focus) */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 text-xs">
+            <div className="flex items-center space-x-1.5 text-slate-700 dark:text-slate-300">
+              <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+              <span className="font-bold text-[11px]">Grad-CAM Disease Channel:</span>
+            </div>
+
+            <div className="flex items-center space-x-1.5 overflow-x-auto">
+              <button
+                onClick={() => setExplainTarget('predicted')}
+                className={`px-3 py-1 rounded-xl font-bold text-[11px] transition-all flex items-center space-x-1 ${
+                  explainTarget === 'predicted'
+                    ? 'bg-orange-500 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+                title={`Show evidence for winning diagnosis (${stage})`}
+              >
+                <span>🏆 Winner ({stage.split(' ')[0]})</span>
+              </button>
+
+              <button
+                onClick={() => setExplainTarget('ad')}
+                className={`px-2.5 py-1 rounded-xl font-bold text-[11px] transition-all flex items-center space-x-1.5 ${
+                  explainTarget === 'ad'
+                    ? 'bg-red-600 text-white shadow-xs ring-2 ring-red-400/50'
+                    : 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 hover:bg-red-100'
+                }`}
+                title="View the exact brain regions that triggered the Alzheimer's Disease (AD) probability"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></span>
+                <span>🔴 AD Focus ({probs.ad ? (probs.ad * 100).toFixed(1) : '8.3'}%)</span>
+              </button>
+
+              <button
+                onClick={() => setExplainTarget('mci')}
+                className={`px-2.5 py-1 rounded-xl font-bold text-[11px] transition-all flex items-center space-x-1.5 ${
+                  explainTarget === 'mci'
+                    ? 'bg-amber-500 text-white shadow-xs ring-2 ring-amber-400/50'
+                    : 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 hover:bg-amber-100'
+                }`}
+                title="View the brain regions that triggered the Mild Cognitive Impairment (MCI) probability"
+              >
+                <span>🟡 MCI Focus ({probs.mci ? (probs.mci * 100).toFixed(1) : '73.7'}%)</span>
+              </button>
+
+              <button
+                onClick={() => setExplainTarget('cn')}
+                className={`px-2.5 py-1 rounded-xl font-bold text-[11px] transition-all flex items-center space-x-1.5 ${
+                  explainTarget === 'cn'
+                    ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
+                    : 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/50 hover:bg-emerald-100'
+                }`}
+                title="View the brain regions that look Cognitively Normal (CN)"
+              >
+                <span>🟢 CN Focus ({probs.cn ? (probs.cn * 100).toFixed(1) : '18.0'}%)</span>
+              </button>
+            </div>
+          </div>
+
           {/* Medical Slice Display + Navigation Bar Group */}
           <div className="space-y-2.5">
             <div className="relative aspect-square max-h-[440px] mx-auto w-full bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner group">
@@ -832,8 +1091,25 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
               </div>
 
               {showHeatmap && (
-                <div className="absolute bottom-3 right-3 bg-orange-100/90 dark:bg-orange-950/90 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-bold text-orange-900 dark:text-orange-200 border border-orange-300 dark:border-orange-800 flex items-center space-x-1 shadow-sm">
-                  <span>🔥 Grad-CAM Activation Hotspot</span>
+                <div className="absolute bottom-3 right-3 bg-slate-950/85 dark:bg-slate-900/90 backdrop-blur px-3 py-1.5 rounded-xl text-[10px] text-white border border-slate-700/80 flex flex-col space-y-1 shadow-md">
+                  <div className="flex items-center justify-between space-x-2">
+                    <span className="font-bold text-orange-400">
+                      🔥 Grad-CAM Channel: {
+                        explainTarget === 'ad'
+                          ? "Alzheimer's Disease (AD)"
+                          : explainTarget === 'mci'
+                          ? "Mild Cognitive Impairment (MCI)"
+                          : explainTarget === 'cn'
+                          ? "Cognitively Normal (CN)"
+                          : stage
+                      }
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-1.5 text-[9px] text-slate-300">
+                    <span>Low</span>
+                    <div className="w-16 h-1.5 rounded-full bg-gradient-to-r from-blue-600 via-emerald-500 via-amber-400 to-red-600"></div>
+                    <span className="font-bold text-red-400">Peak Hotspot</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -891,11 +1167,10 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
                     key={lm.id}
                     type="button"
                     onClick={() => setSliceIndex(lm.slice)}
-                    className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between space-y-1.5 group relative cursor-pointer ${
-                      isCurrent
+                    className={`p-2.5 rounded-xl border text-left transition-all flex flex-col justify-between space-y-1.5 group relative cursor-pointer ${isCurrent
                         ? 'bg-orange-100/90 dark:bg-orange-950/80 border-orange-400 dark:border-orange-600 shadow-sm ring-2 ring-orange-400/30'
                         : 'bg-white/80 dark:bg-slate-900/70 hover:bg-orange-50/80 dark:hover:bg-slate-800 border-slate-200/80 dark:border-slate-700/80'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-start justify-between gap-1 w-full">
                       <span className="text-base select-none">{lm.icon}</span>
@@ -947,101 +1222,233 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
           </div>
         </div>
 
-        {/* Right 1-Col: AI Stage Prediction & Biomarker Diagnostics */}
-        <div className="space-y-6">
+        {/* Top-Right (Col 3, Row 1): AI Stage Prediction & AD Signal */}
+        <div className="lg:col-start-3 lg:row-start-1 bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-4 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center space-x-2 border-b border-orange-100 dark:border-slate-800 pb-3">
+            <Activity className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+            <span>Diagnostic Classification</span>
+          </h3>
 
-          {/* Prediction Stage Card */}
-          <div className="bg-white dark:bg-slate-900 border border-orange-100 dark:border-slate-800 rounded-3xl p-6 space-y-4 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center space-x-2 border-b border-orange-100 dark:border-slate-800 pb-3">
-              <Activity className="w-4 h-4 text-orange-600 dark:text-orange-400" />
-              <span>Diagnostic Classification</span>
-            </h3>
+          <div className="p-4 rounded-2xl bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-900/60 text-center space-y-2">
+            <span className="text-[10px] uppercase font-bold tracking-widest text-orange-800 dark:text-orange-300 bg-orange-100 dark:bg-orange-900/50 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">
+              Inference Result
+            </span>
+            <h2 className="text-2xl font-black text-orange-700 dark:text-orange-400 tracking-tight">{stage}</h2>
+            <p className="text-xs text-slate-600 dark:text-slate-400">Model Confidence: <span className="font-bold text-slate-900 dark:text-slate-100 font-mono text-sm">{confScore}%</span></p>
+          </div>
 
-            <div className="p-4 rounded-2xl bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-900/60 text-center space-y-2">
-              <span className="text-[10px] uppercase font-bold tracking-widest text-orange-800 dark:text-orange-300 bg-orange-100 dark:bg-orange-900/50 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">
-                Inference Result
+          {/* Recharts Probability Breakdown */}
+          <div className="space-y-2">
+            <p className="text-xs font-bold text-slate-700 dark:text-slate-300">Class Probability Distribution</p>
+            <div className="h-44 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={probabilitiesData} layout="vertical" margin={{ left: -10, right: 10 }}>
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} />
+                  <YAxis dataKey="stage" type="category" tick={{ fill: '#64748b', fontSize: 12, fontWeight: 'bold' }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', borderRadius: '12px', fontSize: '12px', color: '#f8fafc' }}
+                    formatter={(val) => [`${val}%`, 'Probability']}
+                  />
+                  <Bar dataKey="probability" radius={[0, 8, 8, 0]}>
+                    {probabilitiesData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Dedicated Alzheimer's Disease (AD) Biomarker Alert */}
+          <div className={`p-3.5 rounded-2xl border transition-all shadow-xs ${
+            adProbability >= 50
+              ? 'bg-red-50/90 dark:bg-red-950/40 border-red-300 dark:border-red-800/80 text-red-900 dark:text-red-200'
+              : adProbability >= 20
+              ? 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-200'
+              : adProbability >= 1
+              ? 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800/80 text-amber-900 dark:text-amber-200'
+              : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/80 text-emerald-900 dark:text-emerald-200'
+          }`}>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <div className="flex items-center space-x-1.5 font-bold text-xs">
+                <ShieldAlert className={`w-4 h-4 shrink-0 ${
+                  adProbability >= 20 ? 'text-red-600 dark:text-red-400' : adProbability >= 1 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
+                }`} />
+                <span>{geminiProfile?.ad_signal?.title || "Alzheimer's Disease (AD) Signal"}</span>
+              </div>
+              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                adProbability >= 50
+                  ? 'bg-red-200 text-red-900 border-red-300 dark:bg-red-900/60 dark:text-red-200'
+                  : adProbability >= 20
+                  ? 'bg-rose-200 text-rose-900 border-rose-300 dark:bg-rose-900/60 dark:text-rose-200'
+                  : adProbability >= 1
+                  ? 'bg-amber-200 text-amber-900 border-amber-300 dark:bg-amber-900/60 dark:text-amber-200'
+                  : 'bg-emerald-200 text-emerald-900 border-emerald-300 dark:bg-emerald-900/60 dark:text-emerald-200'
+              }`}>
+                {geminiProfile?.ad_signal?.badge || `${adProbability}% AD Risk`}
               </span>
-              <h2 className="text-2xl font-black text-orange-700 dark:text-orange-400 tracking-tight">{stage}</h2>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Model Confidence: <span className="font-bold text-slate-900 dark:text-slate-100 font-mono text-sm">{confScore}%</span></p>
             </div>
 
-            {/* Recharts Probability Breakdown */}
-            <div className="space-y-2">
-              <p className="text-xs font-bold text-slate-700 dark:text-slate-300">Class Probability Distribution</p>
-              <div className="h-44 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={probabilitiesData} layout="vertical" margin={{ left: -10, right: 10 }}>
-                    <XAxis type="number" domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} />
-                    <YAxis dataKey="stage" type="category" tick={{ fill: '#64748b', fontSize: 12, fontWeight: 'bold' }} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', borderRadius: '12px', fontSize: '12px', color: '#f8fafc' }}
-                      formatter={(val) => [`${val}%`, 'Probability']}
-                    />
-                    <Bar dataKey="probability" radius={[0, 8, 8, 0]}>
-                      {probabilitiesData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+            <p className="text-[11px] leading-relaxed">
+              {geminiProfile?.ad_signal?.narrative || dynamicExplanation.adFallbackNarrative}
+            </p>
+          </div>
+        </div>
+
+        {/* Reverse-L Right Arm (Col 3, Rows 2-3): Report */}
+        <div className={`lg:col-start-3 lg:row-start-2 lg:row-end-4 p-5 rounded-3xl lg:rounded-bl-none border ${dynamicExplanation.containerStyle} space-y-3 transition-all shadow-sm flex flex-col justify-between`}>
+          <div className="space-y-3">
+            {/* Header with Report Title and Risk Badge */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-orange-200/50 dark:border-slate-800 pb-2.5">
+              <div className="flex items-center space-x-2 min-w-0">
+                <Brain className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />
+                <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Report
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${dynamicExplanation.badgeStyle}`}>
+                  {geminiProfile?.clinical_profile?.badge || dynamicExplanation.badge}
+                </span>
               </div>
             </div>
 
-            {/* Dynamic Disease Explanation Component */}
-            <div className={`p-4 rounded-2xl border ${dynamicExplanation.containerStyle} space-y-3 transition-all mt-3 shadow-xs`}>
-              {/* Header with Title and Risk Badge */}
-              <div className="flex items-center justify-between gap-2 border-b border-orange-200/50 dark:border-slate-800 pb-2.5">
-                <div className="flex items-center space-x-2">
-                  <Brain className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />
-                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                    Clinical Disease Profile
-                  </span>
-                </div>
-                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${dynamicExplanation.badgeStyle}`}>
-                  {dynamicExplanation.badge}
+            {/* Disease + 3D Scan Focus + Split Causes & Risk Factors */}
+            <div className="space-y-2.5 text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+              <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-700/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                  <Activity className="w-3 h-3 text-orange-500 shrink-0" />
+                  <span>Disease</span>
+                </span>
+                <span className="text-xs font-bold text-slate-900 dark:text-slate-100 block mt-1">
+                  {reportSections.disease}
                 </span>
               </div>
 
-              {/* Dynamic Narrative Summary */}
-              <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
-                {dynamicExplanation.narrative}
-              </p>
-
-              {/* Simple Medical Definition */}
-              <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
-                <span className="font-bold text-slate-800 dark:text-slate-200 block mb-0.5">Clinical Pathology:</span>
-                {dynamicExplanation.definition}
-              </div>
-
-              {/* Key Biomarker Quick Metrics */}
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800">
-                  <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">Atrophy Assessment</span>
-                  <span className={`font-semibold ${dynamicExplanation.atrophyColor} truncate block text-[11px] mt-0.5`}>
-                    {dynamicExplanation.atrophyRating}
+              <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-700/80">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                    <MapPin className="w-3 h-3 text-orange-500 shrink-0" />
+                    <span>3D Scan Focus</span>
+                  </span>
+                  <span className="text-[9px] font-mono font-semibold text-orange-700 dark:text-orange-300 bg-orange-50 dark:bg-orange-950/60 px-2 py-0.5 rounded-full border border-orange-200/80 dark:border-orange-800/70">
+                    {liveFocusInfo.planeLabel} #{sliceIndex + 1} • {liveFocusInfo.channelLabel}
                   </span>
                 </div>
-                <div className="bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800">
-                  <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">Estimated Volume</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block text-[11px] mt-0.5">
-                    {hippoVol} mm³
-                  </span>
-                </div>
-              </div>
-
-              {/* Dynamic Differential & Follow-Up Guidance */}
-              <div className="text-[11px] space-y-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-800 text-slate-600 dark:text-slate-400">
-                <p className="leading-tight">
-                  <strong className="text-slate-700 dark:text-slate-300">Biomarker Dynamic:</strong> {dynamicExplanation.differential}
+                <p className="text-[10.5px] font-medium text-orange-800 dark:text-orange-200/90 bg-orange-50/70 dark:bg-orange-950/30 border border-orange-100 dark:border-orange-900/50 rounded-xl px-2.5 py-1.5 mb-1.5 leading-snug">
+                  {liveFocusInfo.liveNote}
                 </p>
-                <div className="flex items-start space-x-1.5 pt-0.5 text-slate-500 dark:text-slate-400">
-                  <Info className="w-3.5 h-3.5 text-orange-500 shrink-0 mt-0.5" />
-                  <span><strong className="text-slate-700 dark:text-slate-300">Guidance:</strong> {dynamicExplanation.followUp}</span>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                  {reportSections.whereSeen}
+                </p>
+              </div>
+
+              {/* Format 1: Causes & Risk Factors (Brain Changes vs Contributing & Treatable Risks) */}
+              <div className="p-3 rounded-2xl bg-white/90 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                  <Info className="w-3 h-3 text-orange-500 shrink-0" />
+                  <span>Causes &amp; Risk Factors</span>
+                </span>
+                <div className="p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-orange-700 dark:text-orange-300 block mb-0.5">
+                    Brain Changes
+                  </span>
+                  <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                    {reportSections.causesBrainChanges}
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300 block mb-0.5">
+                    Contributing &amp; Treatable Risks
+                  </span>
+                  <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                    {reportSections.causesTreatableRisks}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
+
+          {/* Regenerate Button */}
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-orange-200/50 dark:border-slate-800 text-[10px]">
+            {isGeneratingGemini && (
+              <span className="text-slate-500 dark:text-slate-400 mr-auto">Updating report...</span>
+            )}
+            <button
+              type="button"
+              onClick={() => fetchGeminiProfile(true)}
+              disabled={isGeneratingGemini}
+              className="px-3 py-1 rounded-full bg-white/80 dark:bg-slate-950/60 text-orange-600 hover:text-orange-700 dark:text-orange-400 hover:bg-orange-100/80 dark:hover:bg-slate-800 font-bold transition-all flex items-center space-x-1.5 cursor-pointer border border-orange-200 dark:border-orange-800 shrink-0"
+              title="Generate fresh report"
+            >
+              <RefreshCw className={`w-3 h-3 ${isGeneratingGemini ? 'animate-spin text-orange-500' : ''}`} />
+              <span>{isGeneratingGemini ? 'Generating...' : 'Regenerate'}</span>
+            </button>
+          </div>
         </div>
+
+        {/* Reverse-L Bottom-Left Arm (Cols 1-2, Row 3): Prevention & Risk Reduction */}
+        <div className={`relative lg:col-span-2 lg:col-start-1 lg:row-start-3 p-6 rounded-3xl lg:rounded-r-none border lg:border-r-0 ${dynamicExplanation.containerStyle} shadow-sm space-y-3 transition-opacity ${isGeneratingGemini ? 'opacity-70' : 'opacity-100'}`}>
+          {/* Seamless bridge hiding only the vertical seam where Prevention meets Report */}
+          <span
+            aria-hidden="true"
+            className={`hidden lg:block absolute top-0 bottom-0 -right-[2px] w-[4px] ${dynamicExplanation.bridgeBg} z-10 pointer-events-none`}
+          />
+          <div className="flex items-center justify-between gap-2 border-b border-orange-200/50 dark:border-slate-800 pb-3">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                Prevention &amp; Risk Reduction
+              </span>
+            </div>
+            {isGeneratingGemini && (
+              <span className="text-[10px] font-medium text-orange-600 dark:text-orange-400">
+                Updating...
+              </span>
+            )}
+          </div>
+          <ul className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px] text-slate-600 dark:text-slate-300">
+            {reportSections.preventionTips.map((tip, idx) => {
+              const colonIdx = typeof tip === 'string' ? tip.indexOf(':') : -1;
+              const hasLeadIn = colonIdx > 0 && colonIdx < 40;
+              const isLastOdd =
+                idx === reportSections.preventionTips.length - 1 &&
+                reportSections.preventionTips.length % 2 === 1;
+              return (
+                <li
+                  key={idx}
+                  className={`flex items-start space-x-2 leading-snug p-2.5 rounded-2xl bg-white/90 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-700/70 ${isLastOdd ? 'md:col-span-2' : ''}`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  <span>
+                    {hasLeadIn ? (
+                      <>
+                        <strong className="font-bold text-slate-800 dark:text-slate-100">
+                          {tip.slice(0, colonIdx + 1)}
+                        </strong>
+                        {tip.slice(colonIdx + 1)}
+                      </>
+                    ) : (
+                      tip
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {/* Full-Width Separate Red Transparent Disclaimer Block */}
+        <div className="lg:col-span-3 p-4 rounded-3xl bg-red-500/10 dark:bg-red-500/10 border border-red-500/40 dark:border-red-500/40 text-red-900 dark:text-red-200 backdrop-blur-xs">
+          <div className="flex items-center space-x-1.5 font-bold text-xs text-red-700 dark:text-red-300 mb-1">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
+            <span>Disclaimer</span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-red-800/90 dark:text-red-200/90">
+            {reportSections.disclaimer}
+          </p>
+        </div>
+
       </div>
 
       {/* Clinical Report Download Modal */}
@@ -1069,6 +1476,9 @@ CONFIDENTIAL MEDICAL DOCUMENT - FOR CLINICAL USE ONLY
               <p>SCAN FILE: {filename}</p>
               <p>PREDICTED STAGE: {stage}</p>
               <p>CONFIDENCE: {confScore}%</p>
+              <p className={adProbability >= 1 ? "text-amber-600 dark:text-amber-400 font-bold" : "text-emerald-600 dark:text-emerald-400 font-bold"}>
+                AD RISK SIGNAL: {adProbability}% {adProbability >= 1 ? "(Early Biomarkers Detected)" : "(Negligible)"}
+              </p>
               <p>EXPLAINABILITY: 3D Grad-CAM Generated</p>
             </div>
 

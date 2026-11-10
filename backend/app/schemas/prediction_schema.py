@@ -17,4 +17,5 @@ class PredictionResponse(BaseModel):
     num_slices: int = 96
     hippocampus_volume_mm3: Optional[float] = None
     peak_slices: Optional[dict[str, int]] = None
+    ai_clinical_profile: Optional[dict] = None
     message: str = "Inference completed successfully"

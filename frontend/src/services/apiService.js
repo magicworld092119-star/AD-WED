@@ -1,22 +1,14 @@
 import axios from 'axios';
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
 const API = axios.create({
-  baseURL: `${API_BASE_URL}/api/v1`,
-  timeout: 120000, // 2 minutes timeout for large 3D NIfTI scans & 3D GradCAM
+  baseURL: 'http://localhost:8000/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Attach authenticated user information and handle FormData correctly
+// Attach authenticated user information to all outgoing requests
 API.interceptors.request.use((config) => {
-  // If data is FormData, remove Content-Type so browser automatically generates multipart boundary
-  if (config.data instanceof FormData) {
-    delete config.headers['Content-Type'];
-  }
-
   try {
     const userStr = localStorage.getItem('ad_web_user');
     if (userStr) {
@@ -38,11 +30,11 @@ API.interceptors.request.use((config) => {
 });
 
 export const authAPI = {
-  login: async (email, password) => {
+  login: async (email, password) => {//manage login
     const response = await API.post('/auth/login', { email, password });
     return response.data;
   },
-  register: async (userData) => {
+  register: async (userData) => {// manage register
     const response = await API.post('/auth/register', {
       full_name: userData.fullName,
       email: userData.email,
@@ -81,9 +73,25 @@ export const predictAPI = {
     if (uid) formData.append('user_id', uid);
     if (email) formData.append('user_email', email);
 
-    // Notice: Do NOT explicitly set 'Content-Type': 'multipart/form-data'.
-    // Axios / browser handles it automatically with the boundary parameter.
-    const response = await API.post('/predict', formData);
+    const response = await API.post('/predict', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  },
+  generateClinicalProfile: async (payload) => {
+    const response = await API.post('/predict/generate-clinical-profile', payload);
+    return response.data;
+  },
+  getSaliencyProfile: async (predictionId, targetClass = 'predicted') => {
+    const response = await API.get(`/predict/${predictionId}/saliency-profile`, {
+      params: { target_class: targetClass },
+    });
+    return response.data;
+  },
+  chatAboutScan: async (payload) => {
+    const response = await API.post('/predict/chat', payload);
     return response.data;
   },
 };
@@ -114,9 +122,10 @@ export const historyAPI = {
   },
 };
 
-export const getScanSliceUrl = (predictionId, plane = 'axial', sliceIdx = 48, heatmap = true, opacity = 75, colormap = 'turbo') => {
+export const getScanSliceUrl = (predictionId, plane = 'axial', sliceIdx = 48, heatmap = true, opacity = 75, colormap = 'turbo', targetClass = 'predicted') => {
   if (!predictionId) return null;
-  return `${API_BASE_URL}/api/v1/predict/${predictionId}/slice?plane=${plane.toLowerCase()}&slice_idx=${sliceIdx}&heatmap=${heatmap}&opacity=${opacity}&colormap=${colormap.toLowerCase()}`;
+  const baseUrl = 'http://localhost:8000';
+  return `${baseUrl}/api/v1/predict/${predictionId}/slice?plane=${plane.toLowerCase()}&slice_idx=${sliceIdx}&heatmap=${heatmap}&opacity=${opacity}&colormap=${colormap.toLowerCase()}&target_class=${(targetClass || 'predicted').toLowerCase()}`;
 };
 
 export default API;

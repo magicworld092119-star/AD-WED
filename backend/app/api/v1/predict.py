@@ -22,9 +22,9 @@ router = APIRouter()
 @router.post("/predict", response_model=PredictionResponse, tags=["Inference"])
 async def predict_alzheimer_stage(
     file: UploadFile = File(...),
-    patient_id: Optional[str] = Form(None),
-    patient_age: Optional[str] = Form(None),
-    gender: Optional[str] = Form(None),
+    patient_id: str = Form(""),
+    patient_age: str = Form(""),
+    gender: str = Form(""),
     user_id: Optional[str] = Form(None),
     user_email: Optional[str] = Form(None),
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
@@ -133,13 +133,26 @@ async def predict_alzheimer_stage(
     p_mci = round(float(prob_mci), 3)
     p_ad = round(float(prob_ad), 3)
 
-    p_id = (patient_id or "").strip() or f"PT-{datetime.datetime.now().strftime('%Y%m%d')}-{pred_id[-4:]}"
-    p_age = (patient_age or "").strip() or "70"
-    p_gender = (gender or "").strip() or "Unspecified"
+    p_id = patient_id.strip() if patient_id.strip() else f"PT-{datetime.datetime.now().strftime('%Y%m%d')}-{pred_id[-4:]}"
+    p_age = patient_age.strip() if patient_age.strip() else "70"
+    p_gender = gender.strip() if gender.strip() else "Unspecified"
     scan_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     
     current_uid = (user_id or x_user_id or "").strip() or None
     current_email = (user_email or x_user_email or "").strip().lower() or None
+
+    # Generate dynamic clinical profile using Google Gemini LLM
+    from ai.report_generation.gemini_reporter import generate_clinical_ai_profile
+    ai_profile = generate_clinical_ai_profile(
+        stage=stage,
+        confidence=conf_score,
+        probabilities={"cn": p_cn, "mci": p_mci, "ad": p_ad},
+        hippocampus_volume_mm3=round(hippo_vol, 1),
+        patient_age=p_age,
+        gender=p_gender,
+        patient_id=p_id,
+        peak_slices=peak_slices,
+    )
 
     # Save to history records storage
     history_item = {
@@ -164,7 +177,8 @@ async def predict_alzheimer_stage(
             "cn": p_cn,
             "mci": p_mci,
             "ad": p_ad
-        }
+        },
+        "ai_clinical_profile": ai_profile
     }
     await save_history_record(history_item)
 
@@ -179,8 +193,152 @@ async def predict_alzheimer_stage(
         num_slices=96,
         hippocampus_volume_mm3=round(hippo_vol, 1),
         peak_slices=peak_slices,
+        ai_clinical_profile=ai_profile,
         message=f"3D sMRI scan {file.filename} processed successfully with 3D DenseNet-121."
     )
+
+
+from pydantic import BaseModel
+class ClinicalProfileRequest(BaseModel):
+    stage: str
+    confidence: float
+    probabilities: dict[str, float]
+    hippocampus_volume_mm3: float
+    patient_id: Optional[str] = "Anonymous"
+    patient_age: Optional[str] = "70"
+    gender: Optional[str] = "Unspecified"
+    peak_slices: Optional[dict[str, int]] = None
+    variation_seed: Optional[int] = None
+
+
+@router.post("/predict/generate-clinical-profile", tags=["Inference"])
+def generate_gemini_clinical_profile_endpoint(req: ClinicalProfileRequest):
+    """
+    Generates dynamic clinical assessment (AD Signal + Clinical Disease Profile)
+    using Google Gemini LLM based on 3D DenseNet-121 outputs and hippocampal volumetrics.
+    """
+    logger.info(f"POST /predict/generate-clinical-profile for {req.patient_id}, stage={req.stage}, seed={req.variation_seed}")
+    from ai.report_generation.gemini_reporter import generate_clinical_ai_profile
+    res = generate_clinical_ai_profile(
+        stage=req.stage,
+        confidence=req.confidence,
+        probabilities=req.probabilities,
+        hippocampus_volume_mm3=req.hippocampus_volume_mm3,
+        patient_age=req.patient_age,
+        gender=req.gender,
+        patient_id=req.patient_id,
+        peak_slices=req.peak_slices,
+        variation_seed=req.variation_seed,
+    )
+    logger.info(f"Generated profile source={res.get('source')}, model={res.get('model')}")
+    return res
+
+
+class ScanChatRequest(BaseModel):
+    message: str
+    history: list[dict[str, str]] = []
+    scan_context: dict = {}
+
+
+@router.post("/predict/chat", tags=["Inference"])
+def scan_chat_endpoint(req: ScanChatRequest):
+    """
+    Scan-aware conversational assistant answering patient/clinician questions about
+    the active 3D MRI prediction, heatmap slice/colors, causes, and follow-up steps.
+    """
+    clean_msg = (req.message or "").strip()
+    if not clean_msg:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+    from ai.report_generation.gemini_reporter import chat_about_scan
+    return chat_about_scan(
+        message=clean_msg,
+        history=req.history,
+        scan_context=req.scan_context,
+    )
+
+
+def _load_scan_volume_pair(prediction_id: str, target_class: Optional[str] = "predicted"):
+    """Loads or builds the cached (mri_vol, hm_vol) pair for a scan and target Grad-CAM class."""
+    clean_id = prediction_id.strip()
+    t_class = (target_class or "predicted").lower()
+
+    class_map = {"cn": 0, "0": 0, "mci": 1, "1": 1, "ad": 2, "2": 2}
+    c_idx = class_map.get(t_class, None)
+
+    uploaded_files = list(settings.UPLOADS_DIR.glob(f"{clean_id}_*"))
+    if not uploaded_files and not clean_id.startswith("scan_"):
+        uploaded_files = list(settings.UPLOADS_DIR.glob(f"scan_{clean_id}_*"))
+        if uploaded_files:
+            clean_id = f"scan_{clean_id}"
+
+    if c_idx is not None:
+        cache_path = settings.TEMP_DIR / f"{clean_id}_slices_class_{c_idx}.npz"
+        if not cache_path.exists():
+            if not uploaded_files:
+                raise HTTPException(status_code=404, detail=f"Scan {prediction_id} file not found.")
+            input_tensor, visual_volume, _ = preprocess_mri_volume(uploaded_files[0])
+            model, device = get_model()
+            gradcam = GradCAM3D(model)
+            heatmap_3d = gradcam.generate_heatmap(input_tensor.to(device), target_class=c_idx)
+            np.savez_compressed(cache_path, mri=visual_volume, heatmap=heatmap_3d)
+    else:
+        cache_path = settings.TEMP_DIR / f"{clean_id}_slices.npz"
+        if not cache_path.exists() and not clean_id.startswith("scan_"):
+            alt_path = settings.TEMP_DIR / f"scan_{clean_id}_slices.npz"
+            if alt_path.exists():
+                clean_id = f"scan_{clean_id}"
+                cache_path = alt_path
+
+        if not cache_path.exists():
+            if uploaded_files:
+                input_tensor, visual_volume, _ = preprocess_mri_volume(uploaded_files[0])
+                heatmap_3d = np.zeros_like(visual_volume, dtype=np.float32)
+                hm_path = settings.HEATMAPS_DIR / f"{clean_id}_heatmap.nii.gz"
+                if hm_path.exists():
+                    try:
+                        hm_nimg = nib.load(str(hm_path))
+                        heatmap_3d = hm_nimg.get_fdata(dtype=np.float32)
+                    except Exception as e:
+                        logger.warning(f"Failed to load saved heatmap: {e}")
+                np.savez_compressed(cache_path, mri=visual_volume, heatmap=heatmap_3d)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Slice data for scan {prediction_id} not found."
+                )
+
+    try:
+        data = np.load(str(cache_path))
+        return data["mri"], data["heatmap"]
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read slice data: {str(e)}"
+        )
+
+
+@router.get("/predict/{prediction_id}/saliency-profile", tags=["Inference"])
+def get_saliency_profile(
+    prediction_id: str,
+    target_class: Optional[str] = Query("predicted", pattern="^(?i)(predicted|cn|mci|ad|0|1|2)$")
+):
+    """
+    Returns normalized [0.0, 1.0] colormap-scaled peak activation per slice across
+    axial, coronal, and sagittal planes so the UI reflects true slice heatmap intensity.
+    """
+    mri_vol, hm_vol = _load_scan_volume_pair(prediction_id, target_class)
+    activation_threshold = 0.25
+    brain_mask = mri_vol > 15
+    active = np.where(
+        brain_mask & (hm_vol > activation_threshold),
+        np.clip((hm_vol - activation_threshold) / (1.0 - activation_threshold), 0.0, 1.0),
+        0.0,
+    )
+    return {
+        "sagittal": [round(float(x), 3) for x in active.max(axis=(1, 2))],
+        "coronal": [round(float(x), 3) for x in active.max(axis=(0, 2))],
+        "axial": [round(float(x), 3) for x in active.max(axis=(0, 1))],
+    }
 
 
 @router.get("/predict/{prediction_id}/slice", tags=["Inference"])
@@ -190,57 +348,16 @@ async def get_scan_slice(
     slice_idx: int = Query(48, ge=0, le=95),
     heatmap: bool = Query(True),
     opacity: int = Query(75, ge=0, le=100),
-    colormap: str = Query("turbo", pattern="^(?i)(turbo|jet|inferno|hot)$")
+    colormap: str = Query("turbo", pattern="^(?i)(turbo|jet|inferno|hot)$"),
+    target_class: Optional[str] = Query("predicted", pattern="^(?i)(predicted|cn|mci|ad|0|1|2)$")
 ):
     """
     Returns an ultra-fast rendered high-definition PNG 2D slice with CLAHE brain sharpening
-    and Grad-CAM class activation heatmap overlay.
+    and Grad-CAM class activation heatmap overlay for a requested diagnostic class (Predicted, CN, MCI, or AD).
     """
     plane = plane.lower()
     colormap = colormap.lower()
-    clean_id = prediction_id.strip()
-
-    cache_path = settings.TEMP_DIR / f"{clean_id}_slices.npz"
-    if not cache_path.exists() and not clean_id.startswith("scan_"):
-        alt_path = settings.TEMP_DIR / f"scan_{clean_id}_slices.npz"
-        if alt_path.exists():
-            clean_id = f"scan_{clean_id}"
-            cache_path = alt_path
-
-    if not cache_path.exists():
-        # Fallback: check if uploaded file exists and reconstruct
-        uploaded_files = list(settings.UPLOADS_DIR.glob(f"{clean_id}_*"))
-        if not uploaded_files and not clean_id.startswith("scan_"):
-            uploaded_files = list(settings.UPLOADS_DIR.glob(f"scan_{clean_id}_*"))
-            if uploaded_files:
-                clean_id = f"scan_{clean_id}"
-
-        if uploaded_files:
-            _, visual_volume, _ = preprocess_mri_volume(uploaded_files[0])
-            heatmap_3d = np.zeros_like(visual_volume, dtype=np.float32)
-            hm_path = settings.HEATMAPS_DIR / f"{clean_id}_heatmap.nii.gz"
-            if hm_path.exists():
-                try:
-                    hm_nimg = nib.load(str(hm_path))
-                    heatmap_3d = hm_nimg.get_fdata(dtype=np.float32)
-                except Exception as e:
-                    logger.warning(f"Failed to load saved heatmap: {e}")
-            np.savez_compressed(cache_path, mri=visual_volume, heatmap=heatmap_3d)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Slice data for scan {prediction_id} not found."
-            )
-
-    try:
-        data = np.load(str(cache_path))
-        mri_vol = data["mri"]
-        hm_vol = data["heatmap"]
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to read slice data: {str(e)}"
-        )
+    mri_vol, hm_vol = _load_scan_volume_pair(prediction_id, target_class)
 
     # Slice bounds checking
     slice_idx = max(0, min(slice_idx, 95))

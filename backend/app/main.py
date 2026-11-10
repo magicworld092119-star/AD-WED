@@ -1,8 +1,12 @@
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Automatically add project root to Python search path so 'config' is always found
+# Automatically add project root to Python search path and load environment variables
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(ROOT_DIR / "backend" / ".env", override=True)
+load_dotenv(ROOT_DIR / ".env", override=True)
+
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
