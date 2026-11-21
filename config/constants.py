@@ -1,4 +1,4 @@
-# Disease Classes
+# Disease Classes matching train.py (0: CN, 1: MCI, 2: AD)
 DISEASE_STAGES = {
     0: "Cognitively Normal (CN)",
     1: "Mild Cognitive Impairment (MCI)",

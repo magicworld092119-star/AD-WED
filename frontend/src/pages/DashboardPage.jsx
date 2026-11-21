@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -90,6 +90,16 @@ export default function DashboardPage() {
   const sliceUrl = predId
     ? getScanSliceUrl(predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap, explainTarget)
     : null;
+
+  const hasInitializedSliceRef = useRef(false);
+  useEffect(() => {
+    if (prediction && !hasInitializedSliceRef.current) {
+      if (peakSlices && peakSlices[plane] !== undefined) {
+        setSliceIndex(peakSlices[plane]);
+        hasInitializedSliceRef.current = true;
+      }
+    }
+  }, [prediction, plane, peakSlices]);
 
   const handlePlaneChange = (newPlane) => {
     setPlane(newPlane);
@@ -920,11 +930,30 @@ ${reportSections.disclaimer}
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {/* Focus on Hotspot Button */}
               <button
-                onClick={() => setSliceIndex(peakSlices[plane] ?? 47)}
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold shadow-sm transition-all"
+                onClick={() => {
+                  if (saliencyProfile && Array.isArray(saliencyProfile[plane])) {
+                    const planeScores = saliencyProfile[plane];
+                    const maxScoreIdx = planeScores.indexOf(Math.max(...planeScores));
+                    if (maxScoreIdx !== -1) {
+                      setSliceIndex(maxScoreIdx);
+                      return;
+                    }
+                  }
+                  setSliceIndex(peakSlices[plane] ?? 47);
+                }}
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold shadow-sm transition-all cursor-pointer"
                 title="Jump directly to the slice where the neural network found maximum activation"
               >
-                <span>🎯 Focus Hotspot (#{((peakSlices[plane] ?? 47) + 1)})</span>
+                <span>🎯 Focus Hotspot (#{
+                  (() => {
+                    if (saliencyProfile && Array.isArray(saliencyProfile[plane])) {
+                      const planeScores = saliencyProfile[plane];
+                      const maxScoreIdx = planeScores.indexOf(Math.max(...planeScores));
+                      if (maxScoreIdx !== -1) return maxScoreIdx + 1;
+                    }
+                    return (peakSlices[plane] ?? 47) + 1;
+                  })()
+                })</span>
               </button>
 
               {/* Colormap Selector */}
@@ -1096,14 +1125,19 @@ ${reportSections.disclaimer}
                     <span className="font-bold text-orange-400">
                       🔥 Grad-CAM Channel: {
                         explainTarget === 'ad'
-                          ? "Alzheimer's Disease (AD)"
+                          ? `AD Focus (${probs.ad ? (probs.ad * 100).toFixed(1) : ''}%)`
                           : explainTarget === 'mci'
-                          ? "Mild Cognitive Impairment (MCI)"
+                          ? `MCI Focus (${probs.mci ? (probs.mci * 100).toFixed(1) : ''}%)`
                           : explainTarget === 'cn'
-                          ? "Cognitively Normal (CN)"
-                          : stage
+                          ? `CN Focus (${probs.cn ? (probs.cn * 100).toFixed(1) : ''}%)`
+                          : `${stage} (${confScore}%)`
                       }
                     </span>
+                    {explainTarget !== 'predicted' && explainTarget !== (stage?.toLowerCase().includes('normal') ? 'cn' : stage?.toLowerCase().includes('mild') ? 'mci' : 'ad') && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold text-[9px] border border-amber-500/30">
+                        Minority Channel
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center space-x-1.5 text-[9px] text-slate-300">
                     <span>Low</span>

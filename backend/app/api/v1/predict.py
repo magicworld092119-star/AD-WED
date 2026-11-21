@@ -80,7 +80,15 @@ async def predict_alzheimer_stage(
 
         with torch.no_grad():
             logits = model(input_tensor)
-            probs = torch.softmax(logits, dim=1)[0]
+            
+            # Apply empirical logit bias calibration & temperature scaling if configured
+            if hasattr(settings, "MODEL_CALIBRATION_BIAS") and settings.MODEL_CALIBRATION_BIAS:
+                bias_tensor = torch.tensor(settings.MODEL_CALIBRATION_BIAS, device=device, dtype=torch.float32)
+                temp = getattr(settings, "MODEL_TEMPERATURE", 2.5)
+                calibrated_logits = (logits - bias_tensor) / temp
+                probs = torch.softmax(calibrated_logits, dim=1)[0]
+            else:
+                probs = torch.softmax(logits, dim=1)[0]
             
         prob_cn = float(probs[0].item())
         prob_mci = float(probs[1].item())
@@ -117,8 +125,18 @@ async def predict_alzheimer_stage(
         logger.warning(f"GradCAM generation error: {e}. Falling back to default heatmap.")
         heatmap_3d = np.zeros((96, 96, 96), dtype=np.float32)
 
-    # Find peak activation coordinates for auto-focusing on affected brain area
-    max_coord = np.unravel_index(np.argmax(heatmap_3d), heatmap_3d.shape)
+    # Find peak activation coordinates inside brain tissue (excluding boundary/skull margins)
+    brain_mask = (visual_volume > 20).copy()
+    brain_mask[:6, :, :] = False; brain_mask[-6:, :, :] = False
+    brain_mask[:, :6, :] = False; brain_mask[:, -6:, :] = False
+    brain_mask[:, :, :6] = False; brain_mask[:, :, -6:] = False
+
+    masked_hm = np.where(brain_mask, heatmap_3d, 0.0)
+    if np.max(masked_hm) > 1e-6:
+        max_coord = np.unravel_index(np.argmax(masked_hm), masked_hm.shape)
+    else:
+        max_coord = np.unravel_index(np.argmax(heatmap_3d), heatmap_3d.shape)
+
     peak_slices = {
         "sagittal": int(max_coord[0]),
         "coronal": int(max_coord[1]),
@@ -262,7 +280,11 @@ def _load_scan_volume_pair(prediction_id: str, target_class: Optional[str] = "pr
     clean_id = prediction_id.strip()
     t_class = (target_class or "predicted").lower()
 
-    class_map = {"cn": 0, "0": 0, "mci": 1, "1": 1, "ad": 2, "2": 2}
+    class_map = {
+        "cn": 0, "0": 0,
+        "mci": 1, "1": 1,
+        "ad": 2, "2": 2
+    }
     c_idx = class_map.get(t_class, None)
 
     uploaded_files = list(settings.UPLOADS_DIR.glob(f"{clean_id}_*"))

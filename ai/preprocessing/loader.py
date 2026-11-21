@@ -1,12 +1,14 @@
+
 import nibabel as nib
 import numpy as np
 import torch
-import scipy.ndimage as ndi
+
 from pathlib import Path
 from typing import Tuple
+
+from monai.data import MetaTensor
 from monai.transforms import (
     Compose,
-    LoadImage,
     EnsureChannelFirst,
     Orientation,
     ResizeWithPadOrCrop,
@@ -14,98 +16,332 @@ from monai.transforms import (
     EnsureType
 )
 
-def load_nifti_image(file_path: str | Path) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Load 3D structural MRI NIfTI scan (.nii or .nii.gz) using NiBabel.
-    Returns voxel volume array and 4x4 affine matrix.
-    """
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+DEFAULT_SPATIAL_SIZE = (96, 96, 96)
+
+# Keep False unless this exact cleaning operation was also
+# applied to the training dataset.
+ENABLE_ARTIFACT_CLEANING = False
+
+
+# ============================================================
+# 1. LOAD NIFTI IMAGE
+# ============================================================
+
+def load_nifti_image(
+    file_path: str | Path
+) -> Tuple[np.ndarray, np.ndarray]:
+
+    file_path = Path(file_path)
+
+    if not file_path.exists():
+        raise FileNotFoundError(
+            f"MRI file not found: {file_path}"
+        )
+
     nimg = nib.load(str(file_path))
+
     volume = nimg.get_fdata(dtype=np.float32)
     affine = nimg.affine
+
+    # Handle 4D NIfTI volumes (e.g. multi-channel, multi-frame, or singleton 4th dimension)
+    if volume.ndim == 4:
+        if volume.shape[-1] == 1:
+            volume = np.squeeze(volume, axis=-1)
+        elif volume.shape[0] == 1:
+            volume = np.squeeze(volume, axis=0)
+        else:
+            volume = volume[..., 0]
+
+    if volume.ndim != 3:
+        raise ValueError(
+            f"Expected a 3D MRI volume, but received shape: {volume.shape}"
+        )
+
+    volume = np.nan_to_num(
+        volume,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
     return volume, affine
 
-def clean_artificial_label_artifacts(volume: np.ndarray) -> np.ndarray:
+
+# ============================================================
+# 2. OPTIONAL ARTIFACT CLEANING
+# ============================================================
+
+def clean_artificial_label_artifacts(
+    volume: np.ndarray
+) -> np.ndarray:
+
     """
-    Detects and inpaints burned-in artificial marker labels (such as the white 'L' and 'R'
-    orientation text markers present in MNI templates like avg152T1_LR_nifti.nii).
+    Optional artifact cleaning.
+
+    WARNING:
+    This function should only be enabled if the same
+    preprocessing was applied during model training.
     """
-    v_max = np.max(volume)
-    if v_max <= 0:
+
+    volume = volume.copy()
+
+    if volume.ndim == 4:
+        volume = volume[..., 0]
+
+    if volume.ndim != 3:
         return volume
 
-    sat_count = np.count_nonzero(volume >= 240.0)
-    
-    # If substantial saturated voxels exist inside brain tissue (typical for burned-in LR labels)
-    if 500 < sat_count < 250000:
-        # Estimate real brain tissue 99th percentile excluding artificial markers
-        real_brain = volume[(volume > 10) & (volume < 200)]
-        if len(real_brain) > 0:
-            tissue_p99 = np.percentile(real_brain, 99)
-        else:
-            tissue_p99 = 185.0
-            
-        label_mask = (volume >= tissue_p99)
-        # Dilate label mask by 2 voxels to eliminate all edge anti-aliasing
-        label_mask = ndi.binary_dilation(label_mask, iterations=2)
-        indices = ndi.distance_transform_edt(label_mask, return_distances=False, return_indices=True)
-        cleaned = volume[tuple(indices)]
-        return cleaned
+    if not np.isfinite(volume).all():
+        volume = np.nan_to_num(volume)
+
+    # Do not automatically remove high-intensity voxels.
+    # They may represent legitimate MRI tissue.
 
     return volume
 
-def get_preprocessing_transforms(spatial_size: tuple[int, int, int] = (96, 96, 96)) -> Compose:
+
+# ============================================================
+# 3. PREPROCESSING TRANSFORMS
+# ============================================================
+
+def get_preprocessing_transforms(
+    spatial_size: tuple[int, int, int] = DEFAULT_SPATIAL_SIZE
+) -> Compose:
+
     """
-    Returns the exact preprocessing pipeline used to train best_densenet121_3d.pth.
+    MONAI preprocessing pipeline.
+
+    IMPORTANT:
+    These transforms must match the training pipeline.
     """
+
     return Compose([
-        EnsureChannelFirst(channel_dim="no_channel"),
-        Orientation(axcodes="RAS"),
-        ResizeWithPadOrCrop(spatial_size=spatial_size),
-        NormalizeIntensity(nonzero=True, channel_wise=True),
-        EnsureType()
+
+        # Add channel dimension
+        EnsureChannelFirst(
+            channel_dim="no_channel"
+        ),
+
+        # Convert orientation to RAS
+        Orientation(
+            axcodes="RAS"
+        ),
+
+        # Resize or pad/crop to 96 x 96 x 96
+        ResizeWithPadOrCrop(
+            spatial_size=spatial_size
+        ),
+
+        # Normalize non-zero voxels
+        NormalizeIntensity(
+            nonzero=True,
+            channel_wise=True
+        ),
+
+        # Convert to PyTorch tensor
+        EnsureType(
+            dtype=torch.float32
+        )
+
     ])
+
+
+# ============================================================
+# 4. PREPROCESS MRI FOR MODEL INFERENCE
+# ============================================================
 
 def preprocess_mri_volume(
     file_path: str | Path,
-    target_shape: tuple[int, int, int] = (96, 96, 96)
+    target_shape: tuple[int, int, int] = DEFAULT_SPATIAL_SIZE
 ) -> Tuple[torch.Tensor, np.ndarray, np.ndarray]:
+
     """
-    Preprocess NIfTI MRI scan for model inference and high-definition visualization.
-    
+    Preprocess one MRI scan for 3D DenseNet121 inference.
+
     Returns:
-        - input_tensor: torch.Tensor of shape (1, 1, D, H, W) for DenseNet-121
-        - visual_volume: np.ndarray uint8 of shape (D, H, W) normalized to [0, 255] with artifact removal
-        - affine: 4x4 affine transformation matrix
+
+        input_tensor:
+            Shape = (1, 1, 96, 96, 96)
+            Ready for DenseNet121.
+
+        visual_volume:
+            Shape = (96, 96, 96)
+            uint8 volume for visualization.
+
+        affine:
+            Original NIfTI affine matrix.
     """
-    from monai.data import MetaTensor
 
-    nimg = nib.load(str(file_path))
-    affine = nimg.affine
-    raw_vol = nimg.get_fdata(dtype=np.float32)
+    # --------------------------------------------------------
+    # STEP 1: LOAD MRI
+    # --------------------------------------------------------
 
-    # 1. Clean artificial burned-in text labels (such as MNI 'L'/'R' markers)
-    clean_vol = clean_artificial_label_artifacts(raw_vol)
-    clean_vol = np.nan_to_num(clean_vol, nan=0.0, posinf=0.0, neginf=0.0)
+    raw_vol, affine = load_nifti_image(file_path)
 
-    # 2. Prepare PyTorch MetaTensor with affine for MONAI pipeline
-    tensor_in = MetaTensor(clean_vol, affine=affine)
-    
-    # Apply MONAI transforms
-    transforms = get_preprocessing_transforms(spatial_size=target_shape)
-    tensor_volume = transforms(tensor_in) # shape: (1, 96, 96, 96)
+    print("\n========== MRI PREPROCESSING ==========")
 
-    # 3. Create high-contrast visualization volume (0-255 uint8)
-    vol_np = tensor_volume[0].detach().cpu().numpy()
-    non_zero = vol_np[vol_np > 0]
-    if len(non_zero) > 0:
+    print("File:", Path(file_path).name)
+    print("Original shape:", raw_vol.shape)
+    print("Original dtype:", raw_vol.dtype)
+
+    print(
+        "Original intensity range:",
+        float(np.min(raw_vol)),
+        "to",
+        float(np.max(raw_vol))
+    )
+
+    # --------------------------------------------------------
+    # STEP 2: OPTIONAL ARTIFACT CLEANING
+    # --------------------------------------------------------
+
+    if ENABLE_ARTIFACT_CLEANING:
+
+        clean_vol = clean_artificial_label_artifacts(
+            raw_vol
+        )
+
+    else:
+
+        clean_vol = raw_vol.copy()
+
+    clean_vol = np.nan_to_num(
+        clean_vol,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
+    # --------------------------------------------------------
+    # STEP 3: CREATE METATENSOR
+    # --------------------------------------------------------
+
+    tensor_in = MetaTensor(
+        clean_vol,
+        affine=affine
+    )
+
+    # --------------------------------------------------------
+    # STEP 4: APPLY MONAI TRANSFORMS
+    # --------------------------------------------------------
+
+    transforms = get_preprocessing_transforms(
+        spatial_size=target_shape
+    )
+
+    tensor_volume = transforms(tensor_in)
+
+    # Expected shape: (1, 96, 96, 96)
+
+    if not isinstance(tensor_volume, torch.Tensor):
+        tensor_volume = torch.as_tensor(
+            tensor_volume,
+            dtype=torch.float32
+        )
+
+    tensor_volume = tensor_volume.float()
+
+    expected_shape = (1,) + tuple(target_shape)
+
+    if tuple(tensor_volume.shape) != expected_shape:
+
+        raise ValueError(
+            f"Incorrect preprocessed shape: {tuple(tensor_volume.shape)}. "
+            f"Expected: {expected_shape}"
+        )
+
+    if not torch.isfinite(tensor_volume).all():
+
+        raise ValueError(
+            "Preprocessed MRI contains NaN or infinite values."
+        )
+
+    # --------------------------------------------------------
+    # STEP 5: CREATE VISUALIZATION VOLUME
+    # --------------------------------------------------------
+
+    vol_np = (
+        tensor_volume[0]
+        .detach()
+        .cpu()
+        .numpy()
+    )
+
+    non_zero = vol_np[vol_np != 0]
+
+    if non_zero.size > 0:
+
         p1 = np.percentile(non_zero, 1)
         p99 = np.percentile(non_zero, 99.5)
+
     else:
-        p1, p99 = np.min(vol_np), np.max(vol_np)
 
-    clipped = np.clip(vol_np, p1, p99)
-    norm = (clipped - p1) / (p99 - p1 + 1e-8)
-    visual_volume = (norm * 255.0).astype(np.uint8)
+        p1 = float(np.min(vol_np))
+        p99 = float(np.max(vol_np))
 
-    input_tensor = tensor_volume.unsqueeze(0) # shape: (1, 1, 96, 96, 96)
+    clipped = np.clip(
+        vol_np,
+        p1,
+        p99
+    )
+
+    norm = (
+        (clipped - p1) /
+        (p99 - p1 + 1e-8)
+    )
+
+    visual_volume = (
+        norm * 255.0
+    ).astype(np.uint8)
+
+    # --------------------------------------------------------
+    # STEP 6: ADD BATCH DIMENSION
+    # --------------------------------------------------------
+
+    input_tensor = tensor_volume.unsqueeze(0)
+
+    # Expected shape: (1, 1, 96, 96, 96)
+
+    if input_tensor.ndim != 5:
+
+        raise ValueError(
+            f"Invalid model input dimensions: {input_tensor.shape}"
+        )
+
+    # --------------------------------------------------------
+    # STEP 7: PRINT DIAGNOSTIC INFORMATION
+    # --------------------------------------------------------
+
+    print("Processed shape:", tensor_volume.shape)
+
+    print("Final input shape:", input_tensor.shape)
+
+    print(
+        "Processed intensity range:",
+        float(tensor_volume.min()),
+        "to",
+        float(tensor_volume.max())
+    )
+
+    print(
+        "Mean intensity:",
+        float(tensor_volume.mean())
+    )
+
+    print(
+        "Standard deviation:",
+        float(tensor_volume.std())
+    )
+
+    print("Visualization shape:", visual_volume.shape)
+
+    print("Preprocessing completed successfully.")
+
+    print("=======================================\n")
+
     return input_tensor, visual_volume, affine

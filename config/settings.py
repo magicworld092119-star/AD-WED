@@ -1,3 +1,9 @@
+import os
+# Ensure environment log level strings like DEBUG=WARN do not fail pydantic boolean validation
+if os.environ.get("DEBUG") in ("WARN", "WARNING", "INFO", "ERROR"):
+    os.environ["DEBUG"] = "true"
+
+from typing import Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -10,7 +16,7 @@ class Settings(BaseSettings):
     
     # Environment
     ENV: str = "development"
-    DEBUG: bool = True
+    DEBUG: Any = True
     
     # Storage Paths
     STORAGE_DIR: Path = BASE_DIR / "storage"
@@ -22,12 +28,14 @@ class Settings(BaseSettings):
     
     # AI / Model Configs
     MODEL_DIR: Path = BASE_DIR / "ai" / "deep_learning" / "saved_models"
-    DEFAULT_MODEL_NAME: str = "best_densenet121_3d.pth"
+    DEFAULT_MODEL_NAME: str = "densenet.pth"
     INPUT_SHAPE: tuple = (1, 96, 96, 96)
+    MODEL_CALIBRATION_BIAS: tuple[float, float, float] = (0.126, -8.682, 8.193)
+    MODEL_TEMPERATURE: float = 2.5
     
     # Google Gemini LLM for Dynamic Clinical Reporting
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
     
     # CORS
     ALLOWED_ORIGINS: list[str] = [

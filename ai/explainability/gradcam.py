@@ -36,10 +36,10 @@ class GradCAM3D:
         self._remove_hooks()
 
         def forward_hook(module, input, output):
-            self.activations = output
+            self.activations = output.detach().clone()
 
         def backward_hook(module, grad_in, grad_out):
-            self.gradients = grad_out[0]
+            self.gradients = grad_out[0].detach().clone()
 
         h1 = self.target_layer.register_forward_hook(forward_hook)
         h2 = self.target_layer.register_full_backward_hook(backward_hook)
@@ -50,14 +50,64 @@ class GradCAM3D:
             h.remove()
         self.hook_handles.clear()
 
+    def generate_cam_from_weights(
+        self,
+        input_tensor: torch.Tensor,
+        target_class: int
+    ) -> np.ndarray:
+        """
+        Computes 3D Class Activation Map (CAM) directly from output layer classification weights:
+        CAM_c(x, y, z) = ReLU( sum_k w_{c, k} * A_k(x, y, z) )
+        """
+        self.model.eval()
+        device = input_tensor.device
+        
+        from ai.deep_learning.model_loader import get_output_layer, get_feature_extractor
+        out_layer = get_output_layer(self.model)
+        class_weights = out_layer.weight[target_class].detach().to(device)
+
+        with torch.no_grad():
+            feat_extractor = get_feature_extractor(self.model)
+            feature_maps = feat_extractor(input_tensor)
+            feature_maps = F.relu(feature_maps)
+            
+            w = class_weights.view(1, -1, 1, 1, 1)
+            cam = torch.sum(w * feature_maps, dim=1, keepdim=True)
+            cam = F.relu(cam)
+            
+            spatial_size = input_tensor.shape[2:]
+            cam_up = F.interpolate(cam, size=spatial_size, mode="trilinear", align_corners=False)
+            cam_np = cam_up.squeeze().cpu().numpy()
+
+        p99 = np.percentile(cam_np, 99.5)
+        if p99 > 1e-6:
+            cam_norm = np.clip(cam_np / p99, 0.0, 1.0)
+        else:
+            cam_norm = np.zeros_like(cam_np)
+
+        return cam_norm.astype(np.float32)
+
     def generate_heatmap(
         self,
         input_tensor: torch.Tensor,
-        target_class: Optional[int] = None
+        target_class: Optional[int] = None,
+        method: str = "weights"
     ) -> np.ndarray:
         """
-        Computes 3D Grad-CAM class activation map with enhanced contrast.
+        Computes 3D class activation map with enhanced focal contrast.
+        Defaults to using output layer weights (Weight-Based CAM), falling back to Grad-CAM.
         """
+        if target_class is None:
+            with torch.no_grad():
+                out = self.model(input_tensor)
+                target_class = int(torch.argmax(out, dim=1).item())
+
+        if method == "weights":
+            try:
+                return self.generate_cam_from_weights(input_tensor, target_class)
+            except Exception:
+                pass
+
         self._register_hooks()
         try:
             self.model.eval()
@@ -67,9 +117,6 @@ class GradCAM3D:
                 
             output = self.model(input_tensor)
             
-            if target_class is None:
-                target_class = torch.argmax(output, dim=1).item()
-                
             self.model.zero_grad()
             score = output[0, target_class]
             score.backward(retain_graph=True)
@@ -98,10 +145,10 @@ class GradCAM3D:
             else:
                 cam_norm = cam_np - pmin
 
-            # Gamma contrast adjustment so affected regions glow vividly
-            cam_enhanced = np.power(cam_norm, 0.75)
+            # Normalize cleanly without non-linear gamma inflation of background noise
+            cam_norm = np.clip(cam_norm, 0.0, 1.0)
             
-            return cam_enhanced.astype(np.float32)
+            return cam_norm.astype(np.float32)
         finally:
             self._remove_hooks()
 
@@ -157,16 +204,20 @@ def overlay_heatmap_on_slice(
 
     hm_norm = np.clip(heatmap_slice, 0.0, 1.0)
 
-    # 4. Only highlight areas with meaningful activation on brain tissue (exclude air/background)
+    # 4. Smooth heatmap slice with subtle Gaussian filter for clean, organic medical visualization
+    hm_smoothed = cv2.GaussianBlur(hm_norm, (5, 5), 1.2)
+
+    # 5. Highlight focal hotspots (ventricles, temporal lobes, hippocampus, cerebellum)
+    # Background brain tissue below 0.20 threshold remains in clean grayscale MRI
     brain_mask = (mri_slice > 15)
-    activation_threshold = 0.25
-    active_mask = brain_mask & (hm_norm > activation_threshold)
+    activation_threshold = 0.20
+    active_mask = brain_mask & (hm_smoothed > activation_threshold)
 
     blended = mri_rgb.copy()
     if np.any(active_mask):
-        # Scale active range to [0, 1] so the entire colormap spectrum highlights the affected area
-        hm_active = np.zeros_like(hm_norm)
-        hm_active[active_mask] = (hm_norm[active_mask] - activation_threshold) / (1.0 - activation_threshold)
+        # Scale active range to [0, 1] so the colormap spectrum highlights the affected area vividly
+        hm_active = np.zeros_like(hm_smoothed)
+        hm_active[active_mask] = (hm_smoothed[active_mask] - activation_threshold) / (1.0 - activation_threshold + 1e-6)
         hm_uint8 = (hm_active * 255.0).astype(np.uint8)
 
         heatmap_colored = cv2.applyColorMap(hm_uint8, cmap)

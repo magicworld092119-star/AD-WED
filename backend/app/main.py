@@ -1,4 +1,7 @@
+import os
 import sys
+if os.environ.get("DEBUG") in ("WARN", "WARNING", "INFO", "ERROR"):
+    os.environ["DEBUG"] = "true"
 from pathlib import Path
 from dotenv import load_dotenv
 
