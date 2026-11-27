@@ -1,7 +1,9 @@
 import axios from 'axios';
 
+const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+
 const API = axios.create({
-  baseURL: 'http://localhost:8000/api/v1',
+  baseURL: `${API_ORIGIN}/api/v1`,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -124,7 +126,7 @@ export const historyAPI = {
 
 export const getScanSliceUrl = (predictionId, plane = 'axial', sliceIdx = 48, heatmap = true, opacity = 75, colormap = 'turbo', targetClass = 'predicted') => {
   if (!predictionId) return null;
-  const baseUrl = 'http://localhost:8000';
+  const baseUrl = API_ORIGIN;
   return `${baseUrl}/api/v1/predict/${predictionId}/slice?plane=${plane.toLowerCase()}&slice_idx=${sliceIdx}&heatmap=${heatmap}&opacity=${opacity}&colormap=${colormap.toLowerCase()}&target_class=${(targetClass || 'predicted').toLowerCase()}`;
 };
 
