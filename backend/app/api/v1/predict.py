@@ -1,10 +1,7 @@
 import uuid
 import datetime
 import io
-import cv2
-import nibabel as nib
-import numpy as np
-import torch
+import gc
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, status, Query, Response
@@ -12,9 +9,6 @@ from backend.app.schemas.prediction_schema import PredictionResponse, StageProba
 from backend.app.api.v1.history import save_history_record
 from config.settings import settings
 from config.constants import DISEASE_STAGES
-from ai.deep_learning.model_loader import get_model
-from ai.preprocessing.loader import preprocess_mri_volume
-from ai.explainability.gradcam import GradCAM3D, overlay_heatmap_on_slice
 from loguru import logger
 
 router = APIRouter()
@@ -34,6 +28,13 @@ async def predict_alzheimer_stage(
     Upload real 3D Brain MRI scan (.nii/.nii.gz) for preprocessing, stage prediction with 3D DenseNet-121,
     and 3D Grad-CAM class activation heatmap generation.
     """
+    # Lazy imports to keep memory lightweight during Uvicorn server startup
+    import numpy as np
+    import torch
+    import nibabel as nib
+    from ai.deep_learning.model_loader import get_model
+    from ai.preprocessing.loader import preprocess_mri_volume
+    from ai.explainability.gradcam import GradCAM3D
     fname_lower = file.filename.lower()
     if not (fname_lower.endswith(".nii") or fname_lower.endswith(".nii.gz") or fname_lower.endswith(".gz")):
         raise HTTPException(
@@ -277,6 +278,8 @@ def scan_chat_endpoint(req: ScanChatRequest):
 
 def _load_scan_volume_pair(prediction_id: str, target_class: Optional[str] = "predicted"):
     """Loads or builds the cached (mri_vol, hm_vol) pair for a scan and target Grad-CAM class."""
+    import numpy as np
+    import nibabel as nib
     clean_id = prediction_id.strip()
     t_class = (target_class or "predicted").lower()
 
@@ -298,6 +301,9 @@ def _load_scan_volume_pair(prediction_id: str, target_class: Optional[str] = "pr
         if not cache_path.exists():
             if not uploaded_files:
                 raise HTTPException(status_code=404, detail=f"Scan {prediction_id} file not found.")
+            from ai.preprocessing.loader import preprocess_mri_volume
+            from ai.deep_learning.model_loader import get_model
+            from ai.explainability.gradcam import GradCAM3D
             input_tensor, visual_volume, _ = preprocess_mri_volume(uploaded_files[0])
             model, device = get_model()
             gradcam = GradCAM3D(model)
@@ -313,6 +319,7 @@ def _load_scan_volume_pair(prediction_id: str, target_class: Optional[str] = "pr
 
         if not cache_path.exists():
             if uploaded_files:
+                from ai.preprocessing.loader import preprocess_mri_volume
                 input_tensor, visual_volume, _ = preprocess_mri_volume(uploaded_files[0])
                 heatmap_3d = np.zeros_like(visual_volume, dtype=np.float32)
                 hm_path = settings.HEATMAPS_DIR / f"{clean_id}_heatmap.nii.gz"
@@ -348,6 +355,7 @@ def get_saliency_profile(
     Returns normalized [0.0, 1.0] colormap-scaled peak activation per slice across
     axial, coronal, and sagittal planes so the UI reflects true slice heatmap intensity.
     """
+    import numpy as np
     mri_vol, hm_vol = _load_scan_volume_pair(prediction_id, target_class)
     activation_threshold = 0.25
     brain_mask = mri_vol > 15
@@ -377,6 +385,9 @@ async def get_scan_slice(
     Returns an ultra-fast rendered high-definition PNG 2D slice with CLAHE brain sharpening
     and Grad-CAM class activation heatmap overlay for a requested diagnostic class (Predicted, CN, MCI, or AD).
     """
+    import numpy as np
+    import cv2
+    from ai.explainability.gradcam import overlay_heatmap_on_slice
     plane = plane.lower()
     colormap = colormap.lower()
     mri_vol, hm_vol = _load_scan_volume_pair(prediction_id, target_class)

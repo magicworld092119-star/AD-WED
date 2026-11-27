@@ -1,5 +1,12 @@
 import os
 import sys
+
+# Limit multi-threading memory consumption on constrained cloud instances (e.g. Render 512MB)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MALLOC_ARENA_MAX"] = "2"
+
 if os.environ.get("DEBUG") in ("WARN", "WARNING", "INFO", "ERROR"):
     os.environ["DEBUG"] = "true"
 from pathlib import Path
