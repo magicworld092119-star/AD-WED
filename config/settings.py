@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.0-flash"
     
     # CORS
-    ALLOWED_ORIGINS: list[str] = [
+    ALLOWED_ORIGINS: Any = [
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3002",
@@ -48,7 +48,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
         "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174"
+        "http://127.0.0.1:5174",
+        "https://ad-web-orpin.vercel.app"
     ]
     
     # MongoDB Config
