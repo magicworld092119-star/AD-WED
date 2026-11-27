@@ -36,6 +36,8 @@ class AppDatabase:
     async def connect(self):
         if not settings.MONGODB_URL:
             logger.info("MONGODB_URL is empty. Running in local JSON storage mode.")
+            if settings.ENV.lower() == "production":
+                raise RuntimeError("MONGODB_URL must be configured in production; refusing to use local JSON storage.")
             self.mode = "json"
             return
         
@@ -55,6 +57,8 @@ class AppDatabase:
             # Run data migration from JSON to MongoDB if MongoDB is empty
             await self._migrate_local_data()
         except Exception as e:
+            if settings.ENV.lower() == "production":
+                raise RuntimeError("MongoDB connection failed in production; refusing to use local JSON storage.") from e
             logger.warning(
                 f"Failed to connect to MongoDB: {e}. "
                 "Gracefully falling back to local JSON storage mode."
