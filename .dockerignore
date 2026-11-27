@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Python virtual environment
+venv/
+.venv/
+backend/venv/
+*/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Node / Frontend build
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Temporary storage & runtime data
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/heatmaps/*
+!storage/heatmaps/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
+storage/logs/*
+!storage/logs/.gitkeep
+
+# Environment configs with secrets
+.env.local
+config/.env.local
+
+# Documentation & academic paper
+AD_WEB_Research_Paper.*
+
+# OS and IDE junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
