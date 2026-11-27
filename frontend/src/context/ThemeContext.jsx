@@ -4,14 +4,15 @@ const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
   const [theme, setThemeState] = useState(() => {
-    const savedTheme = localStorage.getItem('ad_web_theme');
-    if (savedTheme === 'dark' || savedTheme === 'light') {
-      return savedTheme;
+    try {
+      const savedTheme = localStorage.getItem('ad_web_theme');
+      if (savedTheme === 'dark' || savedTheme === 'light') {
+        return savedTheme;
+      }
+    } catch {
+      // Fallback if localStorage is inaccessible
     }
-    // Check system preference default
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
-    }
+    // Default to clean medical light mode across all devices
     return 'light';
   });
 
