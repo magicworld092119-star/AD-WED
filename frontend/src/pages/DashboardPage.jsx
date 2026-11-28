@@ -91,6 +91,93 @@ export default function DashboardPage() {
     ? getScanSliceUrl(predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap, explainTarget)
     : null;
 
+  // Ultra-smooth 60 FPS navigation: local slice caching, sliding window preloader & flicker-free display
+  const [displayedSliceUrl, setDisplayedSliceUrl] = useState(sliceUrl);
+  const preloadedSlicesRef = useRef(new Set());
+
+  // Keep displayedSliceUrl updated without blanking or flickering
+  useEffect(() => {
+    if (!sliceUrl) return;
+    setImageError(false);
+
+    if (preloadedSlicesRef.current.has(sliceUrl)) {
+      setDisplayedSliceUrl(sliceUrl);
+      return;
+    }
+
+    let active = true;
+    const img = new Image();
+    img.onload = () => {
+      preloadedSlicesRef.current.add(sliceUrl);
+      if (active) {
+        setDisplayedSliceUrl(sliceUrl);
+      }
+    };
+    img.onerror = () => {
+      if (active) {
+        setDisplayedSliceUrl(sliceUrl);
+      }
+    };
+    img.src = sliceUrl;
+
+    return () => {
+      active = false;
+    };
+  }, [sliceUrl]);
+
+  // High-priority sliding window preloader: +/- 10 slices around current slider position
+  useEffect(() => {
+    if (!predId) return;
+
+    const windowRange = 10;
+    const nearbyIndices = [];
+    for (let offset = 1; offset <= windowRange; offset++) {
+      if (sliceIndex + offset < totalSlices) nearbyIndices.push(sliceIndex + offset);
+      if (sliceIndex - offset >= 0) nearbyIndices.push(sliceIndex - offset);
+    }
+
+    nearbyIndices.forEach((idx) => {
+      const url = getScanSliceUrl(predId, plane, idx, showHeatmap, heatmapOpacity, colormap, explainTarget);
+      if (url && !preloadedSlicesRef.current.has(url)) {
+        const img = new Image();
+        img.onload = () => preloadedSlicesRef.current.add(url);
+        img.src = url;
+      }
+    });
+  }, [predId, plane, sliceIndex, showHeatmap, heatmapOpacity, colormap, explainTarget, totalSlices]);
+
+  // Progressive background preloader: loads all slices of active plane in background for instant scrubbing
+  useEffect(() => {
+    if (!predId) return;
+
+    let cancelled = false;
+    let nextIdx = 0;
+
+    const loadBatch = () => {
+      if (cancelled || nextIdx >= totalSlices) return;
+      const batchEnd = Math.min(nextIdx + 6, totalSlices);
+      for (let i = nextIdx; i < batchEnd; i++) {
+        const url = getScanSliceUrl(predId, plane, i, showHeatmap, heatmapOpacity, colormap, explainTarget);
+        if (url && !preloadedSlicesRef.current.has(url)) {
+          const img = new Image();
+          img.onload = () => preloadedSlicesRef.current.add(url);
+          img.src = url;
+        }
+      }
+      nextIdx = batchEnd;
+
+      if (nextIdx < totalSlices && !cancelled) {
+        setTimeout(loadBatch, 80);
+      }
+    };
+
+    const initialTimer = setTimeout(loadBatch, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(initialTimer);
+    };
+  }, [predId, plane, showHeatmap, heatmapOpacity, colormap, explainTarget, totalSlices]);
+
   const hasInitializedSliceRef = useRef(false);
   useEffect(() => {
     if (prediction && !hasInitializedSliceRef.current) {
@@ -508,27 +595,31 @@ export default function DashboardPage() {
   }, [plane, sliceIndex, anatomicalLandmarks, explainTarget, stage, colormap, showHeatmap, saliencyProfile, peakSlices]);
 
   useEffect(() => {
-    const viewer = {
-      plane: liveFocusInfo.planeLabel,
-      slice_number: sliceIndex + 1,
-      channel: liveFocusInfo.channelLabel,
-      colormap,
-      slice_note: liveFocusInfo.liveNote
-    };
-    try {
-      sessionStorage.setItem('ad_live_viewer_context', JSON.stringify(viewer));
-    } catch (e) {}
-    window.dispatchEvent(
-      new CustomEvent('ad-scan-context-update', {
-        detail: {
-          prediction_id: predId,
-          stage,
-          confidence: Number(confScore),
-          probabilities: probs,
-          viewer
-        }
-      })
-    );
+    const timer = setTimeout(() => {
+      const viewer = {
+        plane: liveFocusInfo.planeLabel,
+        slice_number: sliceIndex + 1,
+        channel: liveFocusInfo.channelLabel,
+        colormap,
+        slice_note: liveFocusInfo.liveNote
+      };
+      try {
+        sessionStorage.setItem('ad_live_viewer_context', JSON.stringify(viewer));
+      } catch (e) {}
+      window.dispatchEvent(
+        new CustomEvent('ad-scan-context-update', {
+          detail: {
+            prediction_id: predId,
+            stage,
+            confidence: Number(confScore),
+            probabilities: probs,
+            viewer
+          }
+        })
+      );
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [predId, stage, confScore, probs, sliceIndex, colormap, liveFocusInfo]);
 
   const generateReportHtml = () => {
@@ -1060,12 +1151,12 @@ ${reportSections.disclaimer}
           <div className="space-y-2.5">
             <div className="relative aspect-square max-h-[440px] mx-auto w-full bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner group">
 
-              {sliceUrl && !imageError ? (
+              {(displayedSliceUrl || sliceUrl) && !imageError ? (
                 <img
-                  src={sliceUrl}
+                  src={displayedSliceUrl || sliceUrl}
                   alt={`${plane} slice ${sliceIndex}`}
                   onError={() => setImageError(true)}
-                  className="w-full h-full object-contain select-none"
+                  className="w-full h-full object-contain select-none transition-opacity duration-75"
                 />
               ) : (
                 /* Fallback SVG Brain MRI + GradCAM Visualizer */

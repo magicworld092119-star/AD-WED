@@ -262,60 +262,80 @@ def overlay_heatmap_on_slice(
     mri_slice: np.ndarray,
     heatmap_slice: np.ndarray,
     opacity: float = 0.75,
-    colormap_name: str = "turbo"
+    colormap_name: str = "turbo",
+    target_size: tuple = (512, 512)
 ) -> np.ndarray:
     """
-    Blends a 2D Grad-CAM heatmap slice onto a 2D grayscale MRI slice for clinical display.
+    Blends a 2D Grad-CAM heatmap slice onto a 2D grayscale MRI slice for clinical display
+    with high-fidelity bicubic upsampling, edge-preserving bilateral filtering, and CLAHE contrast.
     
     Processing Steps:
     -----------------
-    1. Grayscale Normalization: Scales raw voxel values to [0, 255] uint8.
-    2. CLAHE Contrast Enhancement: Applies Contrast Limited Adaptive Histogram Equalization
-       to accentuate sulci, gyri, ventricles, and soft tissue boundaries.
-    3. Gaussian Smoothing: Softens the heatmap to prevent blocky interpolation artifacts.
-    4. Tissue Masking: Ignores background air / skull padding (< 15 intensity).
-    5. Activation Thresholding: Only displays colors where activation exceeds 20% (threshold = 0.20),
-       ensuring non-diseased healthy tissue remains clean grayscale MRI.
-    6. Alpha Blending: Proportional blending based on user-selected opacity.
+    1. Grayscale Normalization: Robust percentile scaling [1st, 99.5th] to [0, 255] uint8.
+    2. High-Definition Upsampling: Bicubic interpolation to target_size (512x512) for smooth tone.
+    3. Edge-Preserving Denoising: Bilateral filter removes voxel stepping artifacts while keeping
+       anatomical boundaries (cortex, sulci, ventricles, skull bone) razor-sharp.
+    4. CLAHE Contrast Enhancement: Optimized contrast enhancement across brain anatomy without
+       amplifying high-frequency grain or speckle noise.
+    5. Continuous Heatmap Smoothing: Gaussian spatial filter for organic medical radiation hotspot.
+    6. Tissue Masking & Alpha Blending: Retains clean grayscale brain anatomy outside active regions.
 
     Args:
         mri_slice (np.ndarray): 2D array of MRI voxel values (H, W).
         heatmap_slice (np.ndarray): 2D float array of Grad-CAM activations (0.0 to 1.0).
         opacity (float): Heatmap opacity factor (0.0 = MRI only, 1.0 = solid heatmap).
         colormap_name (str): Color palette ('turbo', 'jet', 'inferno', 'hot').
+        target_size (tuple): Output resolution (height, width), defaults to (512, 512).
 
     Returns:
-        np.ndarray: Blended RGB image of shape (H, W, 3) ready for PNG rendering.
+        np.ndarray: Blended RGB image of shape (target_size[0], target_size[1], 3).
     """
     # -------------------------------------------------------------------------
-    # 1. Normalize and sharpen MRI slice using CLAHE
+    # 1. Normalize raw MRI voxel slice to [0, 255] uint8 with robust percentile clipping
     # -------------------------------------------------------------------------
     if mri_slice.dtype != np.uint8:
-        pmin, pmax = np.percentile(mri_slice, 1), np.percentile(mri_slice, 99.5)
-        mri_slice = np.clip(mri_slice, pmin, pmax)
-        mri_slice = ((mri_slice - pmin) / (pmax - pmin + 1e-8) * 255.0).astype(np.uint8)
+        pmin = float(np.percentile(mri_slice, 1))
+        pmax = float(np.percentile(mri_slice, 99.5))
+        if pmax <= pmin:
+            pmax = pmin + 1.0
+        mri_clipped = np.clip(mri_slice, pmin, pmax)
+        mri_slice = ((mri_clipped - pmin) / (pmax - pmin) * 255.0).astype(np.uint8)
 
-    # Enhance structural brain contrast (sulci, gyri, ventricles)
-    clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
-    mri_sharpened = clahe.apply(mri_slice)
-    mri_rgb = cv2.cvtColor(mri_sharpened, cv2.COLOR_GRAY2RGB)
+    # -------------------------------------------------------------------------
+    # 2. High-Definition Upsampling & Edge-Preserving Denoising
+    # -------------------------------------------------------------------------
+    if target_size and (mri_slice.shape[0] != target_size[0] or mri_slice.shape[1] != target_size[1]):
+        mri_high_res = cv2.resize(mri_slice, (target_size[1], target_size[0]), interpolation=cv2.INTER_CUBIC)
+    else:
+        mri_high_res = mri_slice.copy()
 
-    # If opacity is negligible, return pure grayscale MRI immediately
+    # Bilateral filter smooths voxel stepping while retaining sharp anatomical edges
+    mri_smooth = cv2.bilateralFilter(mri_high_res, d=5, sigmaColor=25, sigmaSpace=25)
+
+    # -------------------------------------------------------------------------
+    # 3. Structural Brain Contrast Enhancement (CLAHE on 512x512)
+    # -------------------------------------------------------------------------
+    clahe = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
+    mri_enhanced = clahe.apply(mri_smooth)
+    mri_rgb = cv2.cvtColor(mri_enhanced, cv2.COLOR_GRAY2RGB)
+
+    # If opacity is negligible, return pure high-def grayscale MRI immediately
     if opacity <= 0.02:
         return mri_rgb
 
     # -------------------------------------------------------------------------
-    # 2. Resize heatmap slice if dimensions differ from MRI slice
+    # 4. Heatmap Upscaling and Organic Gaussian Smoothing
     # -------------------------------------------------------------------------
-    if heatmap_slice.shape != mri_slice.shape:
-        heatmap_slice = cv2.resize(
-            heatmap_slice,
-            (mri_slice.shape[1], mri_slice.shape[0]),
-            interpolation=cv2.INTER_CUBIC
-        )
+    if target_size and (heatmap_slice.shape[0] != target_size[0] or heatmap_slice.shape[1] != target_size[1]):
+        hm_high_res = cv2.resize(heatmap_slice, (target_size[1], target_size[0]), interpolation=cv2.INTER_CUBIC)
+    else:
+        hm_high_res = heatmap_slice.copy()
+
+    hm_norm = np.clip(hm_high_res, 0.0, 1.0)
+    hm_smoothed = cv2.GaussianBlur(hm_norm, (15, 15), 3.0)
 
     # -------------------------------------------------------------------------
-    # 3. Resolve Colormap Palette
+    # 5. Resolve Colormap Palette
     # -------------------------------------------------------------------------
     colormaps = {
         "turbo": cv2.COLORMAP_TURBO,      # Perceptually uniform rainbow (standard)
@@ -325,18 +345,11 @@ def overlay_heatmap_on_slice(
     }
     cmap = colormaps.get(colormap_name.lower(), cv2.COLORMAP_TURBO)
 
-    hm_norm = np.clip(heatmap_slice, 0.0, 1.0)
-
     # -------------------------------------------------------------------------
-    # 4. Smooth heatmap slice with subtle Gaussian filter for clean organic visualization
-    # -------------------------------------------------------------------------
-    hm_smoothed = cv2.GaussianBlur(hm_norm, (5, 5), 1.2)
-
-    # -------------------------------------------------------------------------
-    # 5. Highlight focal hotspots (ventricles, temporal lobes, hippocampus)
+    # 6. Highlight focal hotspots (ventricles, temporal lobes, hippocampus)
     # Background brain tissue below 0.20 threshold remains clean grayscale MRI.
     # -------------------------------------------------------------------------
-    brain_mask = (mri_slice > 15)                  # Exclude background black space
+    brain_mask = (mri_enhanced > 18)               # Exclude background black space
     activation_threshold = 0.20                    # Exclude low-confidence noise
     active_mask = brain_mask & (hm_smoothed > activation_threshold)
 

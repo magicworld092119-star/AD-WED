@@ -410,17 +410,15 @@ async def get_scan_slice(
         mri_slice = np.rot90(mri_vol[slice_idx, :, :])
         hm_slice = np.rot90(hm_vol[slice_idx, :, :])
 
-    # Blend heatmap over MRI slice with CLAHE brain sharpening and colormap selection
+    # Blend heatmap over MRI slice with high-definition enhancement and colormap selection
     actual_opacity = (opacity / 100.0) if heatmap else 0.0
-    blended_rgb = overlay_heatmap_on_slice(
+    display_img = overlay_heatmap_on_slice(
         mri_slice,
         hm_slice,
         opacity=actual_opacity,
-        colormap_name=colormap
+        colormap_name=colormap,
+        target_size=(512, 512)
     )
-
-    # Resize to high-definition display (512x512) using Lanczos4 interpolation for crisp detail
-    display_img = cv2.resize(blended_rgb, (512, 512), interpolation=cv2.INTER_LANCZOS4)
 
     # Encode as PNG image
     bgr_img = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
@@ -428,4 +426,11 @@ async def get_scan_slice(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to encode slice PNG image")
 
-    return Response(content=encoded_png.tobytes(), media_type="image/png")
+    return Response(
+        content=encoded_png.tobytes(),
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
