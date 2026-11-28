@@ -267,18 +267,19 @@ def overlay_heatmap_on_slice(
 ) -> np.ndarray:
     """
     Blends a 2D Grad-CAM heatmap slice onto a 2D grayscale MRI slice for clinical display
-    with high-fidelity bicubic upsampling, edge-preserving bilateral filtering, and CLAHE contrast.
+    with high-fidelity bicubic upsampling, edge-preserving bilateral filtering, solid brain cavity
+    masking (zero black-hole artifacts in sulci/ventricles), and continuous smoothstep alpha feathering.
     
     Processing Steps:
     -----------------
     1. Grayscale Normalization: Robust percentile scaling [1st, 99.5th] to [0, 255] uint8.
-    2. High-Definition Upsampling: Bicubic interpolation to target_size (512x512) for smooth tone.
-    3. Edge-Preserving Denoising: Bilateral filter removes voxel stepping artifacts while keeping
-       anatomical boundaries (cortex, sulci, ventricles, skull bone) razor-sharp.
-    4. CLAHE Contrast Enhancement: Optimized contrast enhancement across brain anatomy without
-       amplifying high-frequency grain or speckle noise.
-    5. Continuous Heatmap Smoothing: Gaussian spatial filter for organic medical radiation hotspot.
-    6. Tissue Masking & Alpha Blending: Retains clean grayscale brain anatomy outside active regions.
+    2. High-Definition Upsampling: Bicubic interpolation to target_size (512x512) for smooth continuous tone.
+    3. Edge-Preserving Denoising: Bilateral filter removes voxel stepping while keeping anatomical margins sharp.
+    4. CLAHE Contrast Enhancement: Optimized contrast across brain anatomy without amplifying grain or speckle noise.
+    5. Solid Brain Masking: Morphological closing & flood-fill hole filling prevents dark brain tissue, sulcal
+       grooves, and ventricles from being punched out as black dots or holes in the heatmap.
+    6. Organic Heatmap Smoothing: Gaussian spatial filter for natural, continuous medical radiation hotspot.
+    7. Smoothstep Alpha Feathering: 3x^2 - 2x^3 ramp creates seamless soft transition at boundary margins.
 
     Args:
         mri_slice (np.ndarray): 2D array of MRI voxel values (H, W).
@@ -324,7 +325,26 @@ def overlay_heatmap_on_slice(
         return mri_rgb
 
     # -------------------------------------------------------------------------
-    # 4. Heatmap Upscaling and Organic Gaussian Smoothing
+    # 4. Generate Solid Anatomical Brain Mask (eliminates black holes in sulci/ventricles)
+    # -------------------------------------------------------------------------
+    # Threshold head outline from black background air
+    _, raw_mask = cv2.threshold(mri_smooth, 10, 255, cv2.THRESH_BINARY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (19, 19))
+    # Morphological closing fills sulci grooves and interior dark gaps
+    brain_mask_closed = cv2.morphologyEx(raw_mask, cv2.MORPH_CLOSE, kernel)
+
+    # Flood-fill from outer corner to fill any interior ventricles and cavities
+    h, w = brain_mask_closed.shape
+    flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+    filled = brain_mask_closed.copy()
+    cv2.floodFill(filled, flood_mask, (0, 0), 255)
+    solid_brain_mask = (brain_mask_closed | cv2.bitwise_not(filled)) > 0
+
+    # Soft feathering at the outer skull boundary to avoid aliased perimeter
+    mask_float = cv2.GaussianBlur(solid_brain_mask.astype(np.float32), (9, 9), 2.0)
+
+    # -------------------------------------------------------------------------
+    # 5. Smooth High-Res Heatmap
     # -------------------------------------------------------------------------
     if target_size and (heatmap_slice.shape[0] != target_size[0] or heatmap_slice.shape[1] != target_size[1]):
         hm_high_res = cv2.resize(heatmap_slice, (target_size[1], target_size[0]), interpolation=cv2.INTER_CUBIC)
@@ -332,10 +352,22 @@ def overlay_heatmap_on_slice(
         hm_high_res = heatmap_slice.copy()
 
     hm_norm = np.clip(hm_high_res, 0.0, 1.0)
-    hm_smoothed = cv2.GaussianBlur(hm_norm, (15, 15), 3.0)
+    # Organic continuous spatial Gaussian filter
+    hm_smoothed = cv2.GaussianBlur(hm_norm, (21, 21), 4.0)
+
+    # Restrict heatmap strictly to inside the brain cavity (zero in background air)
+    hm_in_brain = hm_smoothed * mask_float
 
     # -------------------------------------------------------------------------
-    # 5. Resolve Colormap Palette
+    # 6. Smoothstep Alpha Feathering (soft threshold transition)
+    # -------------------------------------------------------------------------
+    activation_threshold = 0.18
+    hm_active = np.clip((hm_in_brain - activation_threshold) / (1.0 - activation_threshold), 0.0, 1.0)
+    # Smoothstep interpolation: 3x^2 - 2x^3 creates smooth non-linear edge fade
+    hm_feathered = hm_active * hm_active * (3.0 - 2.0 * hm_active)
+
+    # -------------------------------------------------------------------------
+    # 7. Resolve Colormap Palette
     # -------------------------------------------------------------------------
     colormaps = {
         "turbo": cv2.COLORMAP_TURBO,      # Perceptually uniform rainbow (standard)
@@ -343,31 +375,16 @@ def overlay_heatmap_on_slice(
         "inferno": cv2.COLORMAP_INFERNO,  # Black-to-yellow thermal palette
         "hot": cv2.COLORMAP_HOT           # Black-red-yellow thermal palette
     }
-    cmap = colormaps.get(colormap_name.lower(), cv2.COLORMAP_TURBO)
+    cmap_id = colormaps.get(colormap_name.lower(), cv2.COLORMAP_TURBO)
+
+    hm_uint8 = (hm_active * 255.0).astype(np.uint8)
+    heatmap_colored = cv2.applyColorMap(hm_uint8, cmap_id)
+    heatmap_rgb = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
 
     # -------------------------------------------------------------------------
-    # 6. Highlight focal hotspots (ventricles, temporal lobes, hippocampus)
-    # Background brain tissue below 0.20 threshold remains clean grayscale MRI.
+    # 8. Continuous Alpha Blending
     # -------------------------------------------------------------------------
-    brain_mask = (mri_enhanced > 18)               # Exclude background black space
-    activation_threshold = 0.20                    # Exclude low-confidence noise
-    active_mask = brain_mask & (hm_smoothed > activation_threshold)
-
-    blended = mri_rgb.copy()
-    if np.any(active_mask):
-        # Rescale active range [threshold, 1.0] -> [0.0, 1.0] to utilize the full colormap spectrum
-        hm_active = np.zeros_like(hm_smoothed)
-        hm_active[active_mask] = (hm_smoothed[active_mask] - activation_threshold) / (1.0 - activation_threshold + 1e-6)
-        hm_uint8 = (hm_active * 255.0).astype(np.uint8)
-
-        # Apply OpenCV colormap
-        heatmap_colored = cv2.applyColorMap(hm_uint8, cmap)
-        heatmap_rgb = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-
-        # Alpha blend proportional to activation intensity and user opacity slider
-        alpha = (hm_active[:, :, np.newaxis] * float(np.clip(opacity, 0.0, 1.0)))
-        blended[active_mask] = (
-            alpha[active_mask] * heatmap_rgb[active_mask] + (1.0 - alpha[active_mask]) * mri_rgb[active_mask]
-        ).astype(np.uint8)
+    alpha = (hm_feathered[:, :, np.newaxis] * float(np.clip(opacity, 0.0, 1.0)) * mask_float[:, :, np.newaxis])
+    blended = (alpha * heatmap_rgb + (1.0 - alpha) * mri_rgb).astype(np.uint8)
 
     return blended
