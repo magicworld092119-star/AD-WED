@@ -4,11 +4,18 @@ import io
 import gc
 from pathlib import Path
 from typing import Optional
+import numpy as np
+import torch
+import cv2
+import nibabel as nib
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, status, Query, Response
 from backend.app.schemas.prediction_schema import PredictionResponse, StageProbability
 from backend.app.api.v1.history import save_history_record
 from config.settings import settings
 from config.constants import DISEASE_STAGES
+from ai.deep_learning.model_loader import get_model
+from ai.preprocessing.loader import preprocess_mri_volume
+from ai.explainability.gradcam import GradCAM3D, overlay_heatmap_on_slice
 from loguru import logger
 
 router = APIRouter()
@@ -28,13 +35,6 @@ async def predict_alzheimer_stage(
     Upload real 3D Brain MRI scan (.nii/.nii.gz) for preprocessing, stage prediction with 3D DenseNet-121,
     and 3D Grad-CAM class activation heatmap generation.
     """
-    # Lazy imports to keep memory lightweight during Uvicorn server startup
-    import numpy as np
-    import torch
-    import nibabel as nib
-    from ai.deep_learning.model_loader import get_model
-    from ai.preprocessing.loader import preprocess_mri_volume
-    from ai.explainability.gradcam import GradCAM3D
     fname_lower = file.filename.lower()
     if not (fname_lower.endswith(".nii") or fname_lower.endswith(".nii.gz") or fname_lower.endswith(".gz")):
         raise HTTPException(

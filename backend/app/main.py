@@ -1,11 +1,7 @@
 import os
 import sys
 
-# Limit multi-threading memory consumption on constrained cloud instances (e.g. Render 512MB)
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MALLOC_ARENA_MAX"] = "2"
+# High-performance multi-threading and font caching configuration
 os.environ["MPLCONFIGDIR"] = "/tmp"
 
 if os.environ.get("DEBUG") in ("WARN", "WARNING", "INFO", "ERROR"):
@@ -33,6 +29,15 @@ from backend.app.db.database import db
 async def lifespan(app: FastAPI):
     # Startup: Connect to database (with JSON fallback)
     await db.connect()
+    try:
+        from ai.deep_learning.model_loader import get_model
+        from loguru import logger
+        logger.info("Pre-warming 3D DenseNet-121 model in memory for zero cold-start inference...")
+        get_model()
+        logger.info("3D DenseNet-121 neural weights loaded and ready!")
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"Model pre-warm note: {e}")
     yield
     # Shutdown: Clean up connections
     await db.close()
